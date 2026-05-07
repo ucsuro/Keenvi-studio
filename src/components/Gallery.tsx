@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, ChevronLeft, ChevronRight, Maximize2, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { supabase } from '../lib/supabase';
 
 interface GalleryItem {
   id: string;
@@ -33,17 +34,36 @@ export default function Gallery({ type, subCategory }: Props) {
     async function fetchItems() {
       setLoading(true);
       try {
-        const response = await fetch(`/api/gallery/${type}`);
-        const data = await response.json();
+        const dbType = type === 'personal work' ? 'personal' : type;
         
-        let filtered = data;
+        let query = supabase
+          .from('gallery_items')
+          .select('*')
+          .eq('type', dbType)
+          .order('order', { ascending: false });
+
         if (subCategory) {
-          filtered = data.filter((item: GalleryItem) => 
-            item.category.toLowerCase() === subCategory.toLowerCase()
-          );
+          query = query.ilike('category', subCategory);
         }
+
+        const { data, error } = await query;
         
-        setItems(filtered);
+        if (error) throw error;
+        
+        if (data) {
+          const mappedItems: GalleryItem[] = data.map(item => ({
+            id: item.id,
+            title: item.title,
+            category: item.category,
+            imageUrl: item.image_url,
+            thumbnailUrl: item.thumbnail_url,
+            client: item.client,
+            year: item.year,
+            tools: item.tools,
+            description: item.description
+          }));
+          setItems(mappedItems);
+        }
       } catch (error) {
         console.error('Failed to fetch gallery items', error);
       } finally {

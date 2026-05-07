@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Trash2, X, Upload, Check, ChevronUp, ChevronDown } from 'lucide-react';
+import { Plus, Trash2, X, Upload, Check, ChevronUp, ChevronDown, RefreshCcw } from 'lucide-react';
+import { supabase } from '../lib/supabase';
+import { DEFAULT_INTRO, DEFAULT_ABOUT, DEFAULT_CATEGORIES } from '../constants/defaults';
 
 interface GalleryItem {
   id: string;
@@ -97,30 +99,62 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   useEffect(() => {
     fetchCategories();
     if (activeTab === 'about') {
-      fetch('/api/about').then(res => res.json()).then(setAboutData);
+      fetchAboutData();
     } else if (activeTab === 'intro') {
-      fetch('/api/intro').then(res => res.json()).then(setIntroData);
+      fetchIntroData();
     } else {
       fetchItems();
     }
   }, [activeTab]);
 
+  const fetchAboutData = async () => {
+    const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'about').single();
+    if (data) setAboutData(data.value);
+  };
+
+  const fetchIntroData = async () => {
+    const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'intro').single();
+    if (data) setIntroData(data.value);
+  };
+
   const fetchCategories = async () => {
-    const res = await fetch('/api/categories');
-    const data = await res.json();
-    if (activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') {
-      setCategories(data[activeTab] || []);
-    } else {
-      setCategories([]);
+    const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'categories').single();
+    if (data) {
+      const allCats = data.value || {};
+      if (activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') {
+        setCategories(allCats[activeTab] || []);
+      } else {
+        setCategories([]);
+      }
     }
   };
 
   const fetchItems = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/gallery/${activeTab}`);
-      const data = await res.json();
-      setItems(data);
+      const dbType = activeTab === 'personal' ? 'personal' : activeTab;
+      const { data, error } = await supabase
+        .from('gallery_items')
+        .select('*')
+        .eq('type', dbType)
+        .order('order', { ascending: false });
+
+      if (error) throw error;
+      if (data) {
+        const mappedItems: GalleryItem[] = data.map(item => ({
+          id: item.id,
+          title: item.title,
+          category: item.category,
+          imageUrl: item.image_url,
+          thumbnailUrl: item.thumbnail_url,
+          client: item.client,
+          year: item.year,
+          description: item.description,
+          order: item.order,
+          createdAt: item.created_at
+        }));
+        setItems(mappedItems);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -129,21 +163,37 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   };
 
   const handleUpdateItem = async (id: string, updates: Partial<GalleryItem>) => {
-    const res = await fetch(`/api/gallery/${activeTab}/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
-    if (res.ok) {
+    const dbUpdates: any = {};
+    if (updates.title !== undefined) dbUpdates.title = updates.title;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.imageUrl !== undefined) dbUpdates.image_url = updates.imageUrl;
+    if (updates.thumbnailUrl !== undefined) dbUpdates.thumbnail_url = updates.thumbnailUrl;
+    if (updates.client !== undefined) dbUpdates.client = updates.client;
+    if (updates.year !== undefined) dbUpdates.year = updates.year;
+    if (updates.description !== undefined) dbUpdates.description = updates.description;
+    if (updates.order !== undefined) dbUpdates.order = updates.order;
+
+    const { error } = await supabase
+      .from('gallery_items')
+      .update(dbUpdates)
+      .eq('id', id);
+
+    if (!error) {
       setItems(items.map(item => item.id === id ? { ...item, ...updates } : item));
+    } else {
+      console.error('Update failed:', error);
     }
   };
 
   const handleDeleteItem = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this art?')) return;
     try {
-      const res = await fetch(`/api/gallery/${activeTab}/${id}`, { method: 'DELETE' });
-      if (res.ok) {
+      const { error } = await supabase
+        .from('gallery_items')
+        .delete()
+        .eq('id', id);
+
+      if (!error) {
         setItems(items.filter(item => item.id !== id));
       } else {
         alert('Failed to delete item');
@@ -156,15 +206,22 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleFileUpload = async (file: File) => {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      return { url: data.url, thumbnailUrl: data.thumbnailUrl };
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Math.random()}-${Date.now()}.${fileExt}`;
+      const filePath = `uploads/${fileName}`;
+
+      const { data, error } = await supabase.storage
+        .from('gallery')
+        .upload(filePath, file);
+
+      if (error) throw error;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('gallery')
+        .getPublicUrl(filePath);
+
+      // Simple approach: Use same URL for both if client-side resizing isn't fully implemented here
+      return { url: publicUrlData.publicUrl, thumbnailUrl: publicUrlData.publicUrl };
     } catch (err) {
       console.error('Upload failed:', err);
       alert('Upload failed');
@@ -174,15 +231,20 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleManualThumbnailUpload = async (file: File) => {
     try {
-      const formData = new FormData();
-      formData.append('file', file);
+      const fileExt = file.name.split('.').pop();
+      const fileName = `thumbs/${Math.random()}-${Date.now()}.${fileExt}`;
       
-      const res = await fetch('/api/upload/thumbnail', {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      return data.url;
+      const { data, error } = await supabase.storage
+        .from('gallery')
+        .upload(fileName, file);
+
+      if (error) throw error;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('gallery')
+        .getPublicUrl(fileName);
+
+      return publicUrlData.publicUrl;
     } catch (err) {
       console.error('Thumbnail upload failed:', err);
       alert('Thumbnail upload failed');
@@ -192,71 +254,132 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleSaveNewArt = async (e: React.FormEvent) => {
     e.preventDefault();
-    let finalImageUrl = newArt.imageUrl;
-    let finalThumbnailUrl = newArt.thumbnailUrl;
-    
-    if (newArt.file) {
-      const result = await handleFileUpload(newArt.file);
-      if (result) {
-        finalImageUrl = result.url;
-        finalThumbnailUrl = result.thumbnailUrl;
-      } else return; 
-    }
+    setLoading(true);
+    try {
+      let finalImageUrl = newArt.imageUrl;
+      let finalThumbnailUrl = newArt.thumbnailUrl;
+      
+      if (newArt.file) {
+        const result = await handleFileUpload(newArt.file);
+        if (result) {
+          finalImageUrl = result.url;
+          finalThumbnailUrl = result.thumbnailUrl;
+        } else {
+          setLoading(false);
+          return;
+        }
+      }
 
-    if (newArt.manualThumbnailFile) {
-      const manualThumbUrl = await handleManualThumbnailUpload(newArt.manualThumbnailFile);
-      if (manualThumbUrl) finalThumbnailUrl = manualThumbUrl;
-    }
+      if (newArt.manualThumbnailFile) {
+        const manualThumbUrl = await handleManualThumbnailUpload(newArt.manualThumbnailFile);
+        if (manualThumbUrl) finalThumbnailUrl = manualThumbUrl;
+      }
 
-    if (!finalImageUrl) {
-      alert('Please upload an image or provide a URL');
-      return;
-    }
+      if (!finalImageUrl) {
+        alert('Please upload an image or provide a URL');
+        setLoading(false);
+        return;
+      }
 
-    const res = await fetch(`/api/gallery/${activeTab}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        ...newArt, 
-        imageUrl: finalImageUrl, 
-        thumbnailUrl: finalThumbnailUrl,
-        file: undefined, 
-        manualThumbnailFile: undefined 
-      })
-    });
+      const dbType = activeTab === 'personal' ? 'personal' : activeTab;
+      
+      const { data, error } = await supabase
+        .from('gallery_items')
+        .insert([{
+          type: dbType,
+          title: newArt.title,
+          category: newArt.category,
+          client: newArt.client,
+          year: newArt.year,
+          description: newArt.description,
+          image_url: finalImageUrl,
+          thumbnail_url: finalThumbnailUrl,
+          order: items.length > 0 ? Math.max(...items.map(i => i.order || 0)) + 1 : 0
+        }])
+        .select()
+        .single();
 
-    if (res.ok) {
-      setShowAddModal(false);
-      setNewArt({ 
-        title: '', category: '', client: '', year: new Date().getFullYear().toString(), 
-        description: '', imageUrl: '', thumbnailUrl: '', 
-        file: null, manualThumbnailFile: null 
-      });
-      fetchItems();
+      if (!error) {
+        setShowAddModal(false);
+        setNewArt({ 
+          title: '', category: '', client: '', year: new Date().getFullYear().toString(), 
+          description: '', imageUrl: '', thumbnailUrl: '', 
+          file: null, manualThumbnailFile: null 
+        });
+        fetchItems();
+      } else {
+        throw error;
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to save art');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleAddCategory = async () => {
     if (!newCatName.trim()) return;
-    const res = await fetch(`/api/categories/${activeTab}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newCatName })
-    });
-    if (res.ok) {
-      setNewCatName('');
-      fetchCategories();
-      onCategoriesChange?.();
+    
+    try {
+      const { data: res, error: fetchError } = await supabase
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'categories')
+        .single();
+      
+      if (fetchError && fetchError.code !== 'PGRST116') throw fetchError;
+      
+      const allCats = res?.value || { portfolio: [], project: [], personal: [] };
+      if (!allCats[activeTab]) allCats[activeTab] = [];
+      
+      if (!allCats[activeTab].includes(newCatName)) {
+        allCats[activeTab].push(newCatName);
+        
+        const { error: upsertError } = await supabase
+          .from('site_settings')
+          .upsert({ key: 'categories', value: allCats });
+          
+        if (upsertError) throw upsertError;
+        
+        setNewCatName('');
+        await fetchCategories();
+        onCategoriesChange?.();
+      }
+    } catch (err) {
+      console.error('Failed to add category:', err);
+      alert('카테고리 추가 실패: ' + (err instanceof Error ? err.message : 'Unknown error'));
     }
   };
 
   const handleDeleteCategory = async (name: string) => {
-    const res = await fetch(`/api/categories/${activeTab}/${name}`, { method: 'DELETE' });
-    if (res.ok) {
-      fetchCategories();
-      onCategoriesChange?.();
+    try {
+      const { data: res, error: fetchError } = await supabase
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'categories')
+        .single();
+        
+      if (fetchError) throw fetchError;
+      
+      const allCats = res.value;
+      if (allCats[activeTab]) {
+        allCats[activeTab] = allCats[activeTab].filter((c: string) => c !== name);
+        
+        const { error: upsertError } = await supabase
+          .from('site_settings')
+          .upsert({ key: 'categories', value: allCats });
+          
+        if (upsertError) throw upsertError;
+        
+        await fetchCategories();
+        onCategoriesChange?.();
+      }
+    } catch (err) {
+      console.error('Failed to delete category:', err);
     }
   };
+
   const handleMoveCategory = async (index: number, direction: 'up' | 'down') => {
     const newCategories = [...categories];
     const targetIndex = direction === 'up' ? index - 1 : index + 1;
@@ -265,15 +388,28 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     
     [newCategories[index], newCategories[targetIndex]] = [newCategories[targetIndex], newCategories[index]];
     
-    const res = await fetch(`/api/categories/${activeTab}/reorder`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ categories: newCategories })
-    });
-    
-    if (res.ok) {
+    try {
+      const { data: res, error: fetchError } = await supabase
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'categories')
+        .single();
+        
+      if (fetchError) throw fetchError;
+      
+      const allCats = res.value;
+      allCats[activeTab] = newCategories;
+      
+      const { error: upsertError } = await supabase
+        .from('site_settings')
+        .upsert({ key: 'categories', value: allCats });
+        
+      if (upsertError) throw upsertError;
+      
       setCategories(newCategories);
       onCategoriesChange?.();
+    } catch (err) {
+      console.error('Failed to reorder categories:', err);
     }
   };
 
@@ -282,60 +418,85 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     if (!item) return;
     
     const newOrder = (item.order || 0) + delta;
-    const updates = { order: newOrder };
     
-    const res = await fetch(`/api/gallery/${activeTab}/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
+    const { error } = await supabase
+      .from('gallery_items')
+      .update({ order: newOrder })
+      .eq('id', id);
     
-    if (res.ok) {
-      setItems(items.map(i => i.id === id ? { ...i, ...updates } : i).sort((a, b) => {
+    if (!error) {
+      setItems(items.map(i => i.id === id ? { ...i, order: newOrder } : i).sort((a, b) => {
         if (b.order !== a.order) return b.order - a.order;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        return new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime();
       }));
+    } else {
+      console.error('Failed to adjust order:', error);
     }
   };
 
   const handleSaveAbout = async () => {
-    const res = await fetch('/api/about', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(aboutData)
-    });
-    if (res.ok) alert('About page updated');
+    const { error } = await supabase
+      .from('site_settings')
+      .upsert({ key: 'about', value: aboutData });
+    
+    if (!error) alert('About page updated');
+    else console.error(error);
+  };
+
+  const handleRestoreAboutDefaults = () => {
+    if (window.confirm('Restore About defaults?')) {
+      setAboutData(DEFAULT_ABOUT);
+    }
   };
 
   const handleSaveIntro = async () => {
-    const res = await fetch('/api/intro', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(introData)
-    });
-    if (res.ok) alert('Intro context saved');
+    const { error } = await supabase
+      .from('site_settings')
+      .upsert({ key: 'intro', value: introData });
+      
+    if (!error) alert('Intro context saved');
+    else console.error(error);
+  };
+
+  const handleRestoreIntroDefaults = () => {
+    if (window.confirm('Restore Intro defaults?')) {
+      setIntroData(DEFAULT_INTRO);
+    }
+  };
+
+  const handleRestoreCategoryDefaults = async () => {
+    if (window.confirm('Restore categories to original defaults?')) {
+      try {
+        const { error } = await supabase
+          .from('site_settings')
+          .upsert({ key: 'categories', value: DEFAULT_CATEGORIES });
+        
+        if (error) throw error;
+        
+        await fetchCategories();
+        onCategoriesChange?.();
+        alert('Categories restored to defaults');
+      } catch (err) {
+        console.error(err);
+        alert('Failed to restore categories');
+      }
+    }
   };
 
   const handleGatewayUpload = async (type: 'portfolio' | 'project' | 'personal', file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
     try {
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      });
-      const data = await res.json();
-      if (data.url && introData) {
+      const result = await handleFileUpload(file);
+      if (result && introData) {
         setIntroData({
           ...introData,
           gateways: {
             ...introData.gateways,
-            [type]: data.url
+            [type]: result.url
           }
         });
       }
     } catch (err) {
-      console.error('Upload failed');
+      console.error('Gateway upload failed:', err);
     }
   };
 
@@ -358,7 +519,29 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         {/* Content */}
         <div className="flex-grow space-y-8">
           <div className="flex justify-between items-center pb-8 border-b border-white/5">
-            <h2 className="text-2xl font-light tracking-[0.2em] uppercase">Managing {activeTab}</h2>
+            <div className="flex items-center gap-4">
+              <h2 className="text-2xl font-light tracking-[0.2em] uppercase">Managing {activeTab}</h2>
+              {(activeTab === 'intro' || activeTab === 'about') && (
+                <button 
+                  onClick={activeTab === 'intro' ? handleRestoreIntroDefaults : handleRestoreAboutDefaults}
+                  className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
+                  title="Restore original defaults"
+                >
+                  <RefreshCcw size={10} />
+                  Restore Defaults
+                </button>
+              )}
+              {(activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') && (
+                <button 
+                  onClick={handleRestoreCategoryDefaults}
+                  className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
+                  title="Restore category defaults"
+                >
+                  <RefreshCcw size={10} />
+                  Restore Cat. Defaults
+                </button>
+              )}
+            </div>
             {activeTab !== 'about' && activeTab !== 'intro' && (
               <div className="flex gap-4">
                 <button 

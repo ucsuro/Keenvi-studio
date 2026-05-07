@@ -6,6 +6,7 @@ import About from './components/About';
 import Contact from './components/Contact';
 import Admin from './components/Admin';
 import { cn } from './lib/utils';
+import { supabase } from './lib/supabase';
 
 type Page = 'Intro' | 'Portfolio' | 'Project' | 'Personal Work' | 'About' | 'Contact' | 'Admin';
 
@@ -21,64 +22,66 @@ export default function App() {
 
   const fetchCategories = async () => {
     try {
-      const res = await fetch('/api/categories');
-      if (res.ok) {
-        const data = await res.json();
-        setCategories(data);
+      const { data, error } = await supabase
+        .from('site_settings')
+        .select('value')
+        .eq('key', 'categories')
+        .single();
+      
+      if (error) {
+        // If categories don't exist yet, it's fine, we use the default state
+        if (error.code !== 'PGRST116') throw error;
+      }
+      
+      if (data && data.value) {
+        setCategories(data.value);
       }
     } catch (error) {
-      console.error('Failed to fetch categories');
+      console.error('Failed to fetch categories:', error);
     }
   };
 
   // Check login status on mount
   useEffect(() => {
-    if (localStorage.getItem('keenvi_auth')) {
-      setIsLoggedIn(true);
-    }
     fetchCategories();
+    
+    // Auth state listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session) {
+        setIsLoggedIn(true);
+      } else {
+        setIsLoggedIn(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
     try {
-      const res = await fetch('/api/admin/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: adminId.trim(), password: adminPw.trim() })
+      const { error } = await supabase.auth.signInWithPassword({
+        email: adminId.trim(),
+        password: adminPw.trim(),
       });
       
-      let data;
-      try {
-        data = await res.json();
-      } catch (e) {
-        throw new Error('db 접속이 문제가 있습니다.');
-      }
+      if (error) throw error;
 
-      if (res.ok) {
-        setIsLoggedIn(true);
-        localStorage.setItem('keenvi_auth', 'true');
-        setShowLoginModal(false);
-        setAdminId('');
-        setAdminPw('');
-        setLoginError(null);
-
-        if (data.type === 'master') {
-          alert('admin 으로 로그인되었습니다.');
-          window.location.reload();
-        }
-      } else {
-        setLoginError(data.error || '로그인에 실패했습니다.');
-      }
+      setShowLoginModal(false);
+      setAdminId('');
+      setAdminPw('');
+      setLoginError(null);
     } catch (error: any) {
-      setLoginError(error.message || 'db 접속이 문제가 있습니다.');
+      setLoginError(error.message || '로그인에 실패했습니다.');
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setIsLoggedIn(false);
     localStorage.removeItem('keenvi_auth');
+    setActivePage('Intro');
   };
 
   // Scroll to top when page changes
@@ -151,7 +154,7 @@ export default function App() {
           <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 p-8 rounded-sm">
             <h2 className="text-xl tracking-[0.2em] uppercase font-light mb-8 text-center flex flex-col items-center gap-2">
               Studio Access
-              <span className="text-[10px] tracking-widest text-neutral-500 font-mono">v0.35</span>
+              <span className="text-[10px] tracking-widest text-neutral-500 font-mono">v0.39</span>
             </h2>
             
             {loginError && (
@@ -162,8 +165,8 @@ export default function App() {
 
             <form onSubmit={handleLogin} className="space-y-6">
               <input
-                type="text"
-                placeholder="ID"
+                type="email"
+                placeholder="EMAIL"
                 value={adminId}
                 onChange={e => setAdminId(e.target.value)}
                 className="w-full bg-black border-b border-white/10 py-3 focus:outline-none focus:border-white text-sm"

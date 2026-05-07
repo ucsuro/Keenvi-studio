@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Send, Mail, MapPin, Globe } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 export default function Contact() {
   const [form, setForm] = useState({ name: '', email: '', company: '', message: '' });
@@ -10,18 +11,18 @@ export default function Contact() {
     e.preventDefault();
     setStatus('sending');
     try {
-      const res = await fetch('/api/contact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form)
-      });
-      if (res.ok) {
+      const { error } = await supabase
+        .from('messages')
+        .insert([form]);
+      
+      if (!error) {
         setStatus('success');
         setForm({ name: '', email: '', company: '', message: '' });
       } else {
-        setStatus('error');
+        throw error;
       }
     } catch (error) {
+      console.error('Failed to send message:', error);
       setStatus('error');
     }
   };

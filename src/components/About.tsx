@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { supabase } from '../lib/supabase';
 
 interface AboutData {
   title: string;
@@ -14,9 +15,21 @@ export default function About() {
   const [data, setData] = useState<AboutData | null>(null);
 
   useEffect(() => {
-    fetch('/api/about')
-      .then(res => res.json())
-      .then(setData);
+    async function fetchAboutData() {
+      try {
+        const { data: res, error } = await supabase
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'about')
+          .single();
+        
+        if (error) throw error;
+        if (res) setData(res.value);
+      } catch (err) {
+        console.error('Failed to fetch about data:', err);
+      }
+    }
+    fetchAboutData();
   }, []);
 
   if (!data) return null;

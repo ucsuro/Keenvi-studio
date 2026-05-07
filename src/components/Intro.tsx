@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { Twitter, Instagram, Linkedin, Globe, BookOpen, Facebook } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
 
 interface Props {
   onNavigate: (page: any, sub?: string) => void;
@@ -28,10 +29,21 @@ export default function Intro({ onNavigate }: Props) {
   const [data, setData] = useState<IntroData | null>(null);
 
   useEffect(() => {
-    fetch('/api/intro')
-      .then(res => res.json())
-      .then(setData)
-      .catch(err => console.error(err));
+    async function fetchIntroData() {
+      try {
+        const { data: res, error } = await supabase
+          .from('site_settings')
+          .select('value')
+          .eq('key', 'intro')
+          .single();
+        
+        if (error) throw error;
+        if (res) setData(res.value);
+      } catch (err) {
+        console.error('Failed to fetch intro data:', err);
+      }
+    }
+    fetchIntroData();
   }, []);
 
   const socialIcons: Record<string, React.ReactNode> = {
