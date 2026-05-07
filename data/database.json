@@ -1,0 +1,35 @@
+{
+  "portfolio": [
+    {
+      "id": "1",
+      "title": "Desert Nomad",
+      "category": "Illustration",
+      "imageUrl": "https://images.unsplash.com/photo-1509316975850-ff9c5deb0cd9?auto=format&fit=crop&w=1200&q=80",
+      "client": "Personal Project",
+      "year": "2024",
+      "description": "A nomadic character traversing a vast desert landscape."
+    },
+    {
+      "id": "2",
+      "title": "Cyberpunk Cityscape",
+      "category": "Key Art",
+      "imageUrl": "https://images.unsplash.com/photo-1605142859862-978be7eba909?auto=format&fit=crop&w=1200&q=80",
+      "client": "Neo Games",
+      "year": "2023",
+      "description": "Promotional art for an unannounced cyberpunk title."
+    }
+  ],
+  "project": [],
+  "personal": [],
+  "about": {
+    "title": "KeenVi Studio",
+    "description": "KeenVi Studio is a premier concept art and illustration studio specializing in cinematic visuals for games and media.",
+    "bio": "Led by visionary artists, KeenVi Studio has been a cornerstone in the art industry for over a decade, providing high-quality art outsourcing for global clients.",
+    "career": [
+      { "year": "2020-Present", "role": "Lead Studio", "content": "Working on various AAA titles." },
+      { "year": "2015-2020", "role": "Art Outsourcing", "content": "Collaborated with major game studios." }
+    ],
+    "skills": ["Concept Art", "Illustration", "Key Art", "Worldbuilding"],
+    "tools": ["Photoshop", "Blender", "Unreal Engine 5", "ZBrush"]
+  }
+}
