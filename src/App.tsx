@@ -44,7 +44,7 @@ export default function App() {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: adminId, password: adminPw })
+        body: JSON.stringify({ id: adminId.trim(), password: adminPw.trim() })
       });
       if (res.ok) {
         setIsLoggedIn(true);
