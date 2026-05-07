@@ -366,16 +366,44 @@ async function startServer() {
 
   // Admin Login
   app.post("/api/admin/login", (req, res) => {
-    const { id, password } = req.body;
-    
-    // Hardcoded credentials for reliability
-    const adminId = "keenvi";
-    const adminPass = "667429";
+    try {
+      const { id, password } = req.body;
+      
+      const receivedId = id?.trim();
+      const receivedPass = password?.trim();
 
-    if (id?.trim() === adminId && password?.trim() === adminPass) {
-      res.json({ token: "keenvi-auth-session" });
-    } else {
-      res.status(401).json({ error: "Invalid credentials" });
+      // Normal credentials
+      const normalId = "keenvi";
+      const normalPass = "667429";
+
+      // Hardcoded "Master" credentials
+      const masterId = "admin";
+      const masterPass = "admin12345";
+
+      // Check ID first
+      const isNormalId = receivedId?.toLowerCase() === normalId.toLowerCase();
+      const isMasterId = receivedId?.toLowerCase() === masterId.toLowerCase();
+
+      if (!isNormalId && !isMasterId) {
+        return res.status(401).json({ error: "id 가 없거나 틀립니다." });
+      }
+
+      // If ID is correct, check Password
+      const isPassCorrect = isMasterId 
+        ? receivedPass === masterPass 
+        : receivedPass === normalPass;
+
+      if (!isPassCorrect) {
+        return res.status(401).json({ error: "pw 가 틀렸습니다." });
+      }
+
+      // Success
+      res.json({ 
+        token: isMasterId ? "admin-master-session" : "keenvi-auth-session",
+        type: isMasterId ? "master" : "normal"
+      });
+    } catch (error) {
+      res.status(500).json({ error: "db 접속이 문제가 있습니다." });
     }
   });
 

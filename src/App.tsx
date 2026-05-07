@@ -16,6 +16,7 @@ export default function App() {
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [adminId, setAdminId] = useState('');
   const [adminPw, setAdminPw] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [categories, setCategories] = useState<Record<string, string[]>>({ portfolio: [], project: [], personal: [] });
 
   const fetchCategories = async () => {
@@ -40,23 +41,38 @@ export default function App() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setLoginError(null);
     try {
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: adminId.trim(), password: adminPw.trim() })
       });
+      
+      let data;
+      try {
+        data = await res.json();
+      } catch (e) {
+        throw new Error('db 접속이 문제가 있습니다.');
+      }
+
       if (res.ok) {
         setIsLoggedIn(true);
         localStorage.setItem('keenvi_auth', 'true');
         setShowLoginModal(false);
         setAdminId('');
         setAdminPw('');
+        setLoginError(null);
+
+        if (data.type === 'master') {
+          alert('admin 으로 로그인되었습니다.');
+          window.location.reload();
+        }
       } else {
-        alert('Invalid credentials');
+        setLoginError(data.error || '로그인에 실패했습니다.');
       }
-    } catch (error) {
-      alert('Login failed');
+    } catch (error: any) {
+      setLoginError(error.message || 'db 접속이 문제가 있습니다.');
     }
   };
 
@@ -134,6 +150,13 @@ export default function App() {
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 p-8 rounded-sm">
             <h2 className="text-xl tracking-[0.2em] uppercase font-light mb-8 text-center">Studio Access</h2>
+            
+            {loginError && (
+              <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] py-2 px-3 mb-6 text-center animate-in fade-in slide-in-from-top-1">
+                {loginError}
+              </div>
+            )}
+
             <form onSubmit={handleLogin} className="space-y-6">
               <input
                 type="text"
