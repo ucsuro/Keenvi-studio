@@ -151,7 +151,7 @@ export default function App() {
           <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 p-8 rounded-sm">
             <h2 className="text-xl tracking-[0.2em] uppercase font-light mb-8 text-center flex flex-col items-center gap-2">
               Studio Access
-              <span className="text-[10px] tracking-widest text-neutral-500 font-mono">v0.34</span>
+              <span className="text-[10px] tracking-widest text-neutral-500 font-mono">v0.35</span>
             </h2>
             
             {loginError && (
@@ -191,21 +191,6 @@ export default function App() {
                 </button>
               </div>
             </form>
-
-            <button
-              onClick={() => {
-                setAdminId('admin');
-                setAdminPw('admin12345');
-                // Trigger login automatically
-                setTimeout(() => {
-                  const submitEvent = new Event('submit', { cancelable: true, bubbles: true });
-                  document.querySelector('form')?.dispatchEvent(submitEvent);
-                }, 10);
-              }}
-              className="w-full mt-6 text-[8px] tracking-[0.2em] text-neutral-600 uppercase hover:text-neutral-400 transition-colors"
-            >
-              [ quick login as admin ]
-            </button>
           </div>
         </div>
       )}
