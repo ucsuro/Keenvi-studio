@@ -149,7 +149,10 @@ export default function App() {
       {showLoginModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-neutral-900 border border-neutral-800 p-8 rounded-sm">
-            <h2 className="text-xl tracking-[0.2em] uppercase font-light mb-8 text-center">Studio Access</h2>
+            <h2 className="text-xl tracking-[0.2em] uppercase font-light mb-8 text-center flex flex-col items-center gap-2">
+              Studio Access
+              <span className="text-[10px] tracking-widest text-neutral-500 font-mono">v0.32</span>
+            </h2>
             
             {loginError && (
               <div className="bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] py-2 px-3 mb-6 text-center animate-in fade-in slide-in-from-top-1">
