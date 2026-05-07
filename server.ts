@@ -173,11 +173,6 @@ async function startServer() {
   app.use(express.json());
   app.use("/uploads", express.static(UPLOADS_DIR));
 
-  // Diagnostic log for environment variables
-  console.log("Checking Environment Variables:");
-  console.log(`- ADMIN_ID: ${process.env.ADMIN_ID ? "SET (Using custom)" : "NOT SET (Using default: keenvi)"}`);
-  console.log(`- ADMIN_PASSWORD: ${process.env.ADMIN_PASSWORD ? "SET (Using custom)" : "NOT SET (Using default: 667429)"}`);
-
   // Upload Route
   app.post("/api/upload", upload.single("file"), async (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -373,17 +368,13 @@ async function startServer() {
   app.post("/api/admin/login", (req, res) => {
     const { id, password } = req.body;
     
-    // Trim and handle defaults
-    const adminId = (process.env.ADMIN_ID || "keenvi").trim();
-    const adminPass = (process.env.ADMIN_PASSWORD || "667429").trim();
-
-    // Debug log for troubleshooting (redacts the actual password)
-    console.log(`Login attempt for ID: ${id}. Expected: ${adminId}`);
+    // Hardcoded credentials for reliability
+    const adminId = "keenvi";
+    const adminPass = "667429";
 
     if (id?.trim() === adminId && password?.trim() === adminPass) {
       res.json({ token: "keenvi-auth-session" });
     } else {
-      console.warn(`Failed login attempt for ID: ${id}`);
       res.status(401).json({ error: "Invalid credentials" });
     }
   });
