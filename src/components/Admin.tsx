@@ -15,6 +15,8 @@ interface GalleryItem {
   description: string;
   order: number;
   createdAt: string;
+  width?: number;
+  height?: number;
 }
 
 // Helper for resizing images client-side
@@ -50,6 +52,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   const [activeTab, setActiveTab] = useState<'portfolio' | 'project' | 'personal' | 'about' | 'intro'>('portfolio');
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [allCategoriesMap, setAllCategoriesMap] = useState<Record<string, string[]>>({});
+  const [pendingMoves, setPendingMoves] = useState<Record<string, string>>({});
+  const [editingOrders, setEditingOrders] = useState<Record<string, string>>({});
+  const [editingDimensions, setEditingDimensions] = useState<Record<string, { width: string; height: string; ratio?: string }>>({});
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [aboutData, setAboutData] = useState<{
     title: string;
@@ -81,6 +88,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   // Modal states
   const [showAddModal, setShowAddModal] = useState(false);
   const [showCatModal, setShowCatModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<GalleryItem | null>(null);
   const [newCatName, setNewCatName] = useState('');
   
   // Form states for adding new art
@@ -93,7 +102,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     imageUrl: '',
     thumbnailUrl: '',
     file: null as File | null,
-    manualThumbnailFile: null as File | null
+    manualThumbnailFile: null as File | null,
+    width: 0,
+    height: 0
   });
 
   useEffect(() => {
@@ -106,6 +117,14 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       fetchItems();
     }
   }, [activeTab]);
+
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
 
   const fetchAboutData = async () => {
     const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'about').single();
@@ -121,6 +140,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'categories').single();
     if (data) {
       const allCats = data.value || {};
+      setAllCategoriesMap(allCats);
       if (activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') {
         setCategories(allCats[activeTab] || []);
       } else {
@@ -151,7 +171,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           year: item.year,
           description: item.description,
           order: item.order,
-          createdAt: item.created_at
+          createdAt: item.created_at,
+          width: item.width,
+          height: item.height
         }));
         setItems(mappedItems);
       }
@@ -185,22 +207,59 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }
   };
 
-  const handleDeleteItem = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this art?')) return;
+  const handleDeleteItem = (id: string) => {
+    const item = items.find(i => i.id === id);
+    if (item) {
+      setItemToDelete(item);
+      setShowDeleteModal(true);
+    }
+  };
+
+  const executeDelete = async () => {
+    if (!itemToDelete) return;
+    
+    setLoading(true);
     try {
+      // 1. Delete from storage if images exist and are stored in our Supabase bucket
+      const pathsToDelete: string[] = [];
+      
+      const getPath = (url: string) => {
+        const part = '/storage/v1/object/public/gallery/';
+        if (url.includes(part)) {
+          return url.split(part)[1];
+        }
+        return null;
+      };
+
+      const imgPath = getPath(itemToDelete.imageUrl);
+      const thumbPath = itemToDelete.thumbnailUrl ? getPath(itemToDelete.thumbnailUrl) : null;
+
+      if (imgPath) pathsToDelete.push(imgPath);
+      if (thumbPath) pathsToDelete.push(thumbPath);
+
+      if (pathsToDelete.length > 0) {
+        const { error: storageError } = await supabase.storage.from('gallery').remove(pathsToDelete);
+        if (storageError) console.error('Storage deletion warning:', storageError);
+      }
+
+      // 2. Delete from database
       const { error } = await supabase
         .from('gallery_items')
         .delete()
-        .eq('id', id);
+        .eq('id', itemToDelete.id);
 
       if (!error) {
-        setItems(items.filter(item => item.id !== id));
+        setItems(items.filter(item => item.id !== itemToDelete.id));
+        setShowDeleteModal(false);
+        setItemToDelete(null);
       } else {
-        alert('Failed to delete item');
+        throw error;
       }
-    } catch (err) {
-      console.error(err);
-      alert('Error during deletion');
+    } catch (err: any) {
+      console.error('Delete failed:', err);
+      alert('Deletion failed: ' + (err.message || 'Unknown error occurred'));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -282,37 +341,66 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
 
       const dbType = activeTab === 'personal' ? 'personal' : activeTab;
+      const insertData: any = {
+        type: dbType,
+        title: newArt.title,
+        category: newArt.category,
+        client: newArt.client,
+        year: newArt.year,
+        description: newArt.description,
+        image_url: finalImageUrl,
+        thumbnail_url: finalThumbnailUrl,
+        order: items.length > 0 ? Math.max(...items.map(i => i.order || 0)) + 1 : 0
+      };
+
+      // Only add width/height if they are valid
+      if (newArt.width > 0 && newArt.height > 0) {
+        insertData.width = newArt.width;
+        insertData.height = newArt.height;
+      }
       
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('gallery_items')
-        .insert([{
-          type: dbType,
-          title: newArt.title,
-          category: newArt.category,
-          client: newArt.client,
-          year: newArt.year,
-          description: newArt.description,
-          image_url: finalImageUrl,
-          thumbnail_url: finalThumbnailUrl,
-          order: items.length > 0 ? Math.max(...items.map(i => i.order || 0)) + 1 : 0
-        }])
+        .insert([insertData])
         .select()
         .single();
 
+      // Fallback: If DB doesn't have width/height columns yet, try without them
+      if (error && (error as any).code === '42703') {
+        console.warn('DB columns width/height missing, retrying without them...');
+        const safeInsertData = { ...insertData };
+        delete safeInsertData.width;
+        delete safeInsertData.height;
+        
+        const retry = await supabase
+          .from('gallery_items')
+          .insert([safeInsertData])
+          .select()
+          .single();
+        
+        data = retry.data;
+        error = retry.error;
+      }
+
       if (!error) {
         setShowAddModal(false);
+        if (previewUrl) {
+          URL.revokeObjectURL(previewUrl);
+          setPreviewUrl(null);
+        }
         setNewArt({ 
           title: '', category: '', client: '', year: new Date().getFullYear().toString(), 
           description: '', imageUrl: '', thumbnailUrl: '', 
-          file: null, manualThumbnailFile: null 
+          file: null, manualThumbnailFile: null, width: 0, height: 0
         });
         fetchItems();
       } else {
+        console.error('Supabase Insert Error:', error);
         throw error;
       }
-    } catch (err) {
-      console.error(err);
-      alert('Failed to save art');
+    } catch (err: any) {
+      console.error('Save Art Error:', err);
+      alert(`Failed to save art: ${err.message || 'Check database connection'}`);
     } finally {
       setLoading(false);
     }
@@ -413,6 +501,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }
   };
 
+  const [confirmingMoveId, setConfirmingMoveId] = useState<string | null>(null);
+
   const handleAdjustOrder = async (id: string, delta: number) => {
     const item = items.find(i => i.id === id);
     if (!item) return;
@@ -431,6 +521,41 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }));
     } else {
       console.error('Failed to adjust order:', error);
+    }
+  };
+
+  const handleMoveToLocation = async (id: string, typeAndCategory: string) => {
+    if (!typeAndCategory) return;
+    
+    const [targetType, newCategory] = typeAndCategory.split('|');
+    if (!targetType || !newCategory) return;
+
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('gallery_items')
+        .update({ 
+          category: newCategory,
+          type: targetType 
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      alert(`Successfully moved to ${targetType} > ${newCategory}`);
+      
+      // Update local state: if type matches current tab, just update category, else remove from list
+      const currentDbType = activeTab === 'personal' ? 'personal' : activeTab;
+      if (targetType === currentDbType) {
+        setItems(prev => prev.map(item => item.id === id ? { ...item, category: newCategory } : item));
+      } else {
+        setItems(prev => prev.filter(item => item.id !== id));
+      }
+    } catch (err: any) {
+      console.error('Move failed:', err);
+      alert('Failed to move item: ' + (err.message || 'Unknown error'));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -568,7 +693,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   <div className="space-y-4">
                     <label className="text-[10px] uppercase tracking-widest text-neutral-500">Main Logo Text</label>
                     <input 
-                      value={introData.logoText}
+                      value={introData.logoText || ''}
                       onChange={e => setIntroData({...introData, logoText: e.target.value})}
                       className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-white text-xl uppercase tracking-[0.2em]"
                       placeholder="Enter logo name..."
@@ -577,7 +702,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   <div className="space-y-4">
                     <label className="text-[10px] uppercase tracking-widest text-neutral-500">Intro Headline (Description)</label>
                     <textarea 
-                      value={introData.headline}
+                      value={introData.headline || ''}
                       onChange={e => setIntroData({...introData, headline: e.target.value})}
                       className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-white h-24"
                       placeholder="Enter main headline..."
@@ -593,7 +718,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <div key={key} className="space-y-1">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-600">{key}</label>
                         <input 
-                          value={introData.links[key as keyof typeof introData.links]}
+                          value={introData.links[key as keyof typeof introData.links] || ''}
                           onChange={e => setIntroData({
                             ...introData,
                             links: { ...introData.links, [key]: e.target.value }
@@ -662,7 +787,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest text-neutral-500">Studio Name</label>
                   <input 
-                    value={aboutData.title}
+                    value={aboutData.title || ''}
                     onChange={e => setAboutData({...aboutData, title: e.target.value})}
                     className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400"
                   />
@@ -670,7 +795,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest text-neutral-500">Short Description</label>
                   <textarea 
-                    value={aboutData.description}
+                    value={aboutData.description || ''}
                     onChange={e => setAboutData({...aboutData, description: e.target.value})}
                     className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400 h-24"
                   />
@@ -678,7 +803,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest text-neutral-500">Detailed Biography</label>
                   <textarea 
-                    value={aboutData.bio}
+                    value={aboutData.bio || ''}
                     onChange={e => setAboutData({...aboutData, bio: e.target.value})}
                     className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400 h-48"
                   />
@@ -687,7 +812,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-400">Chronicle (Career)</h3>
                     <button 
-                      onClick={() => setAboutData({...aboutData, career: [...(aboutData.career || []), { year: '', title: '', content: '' }]})}
+                      onClick={() => setAboutData({...aboutData, career: [{ year: '', title: '', content: '' }, ...(aboutData.career || [])]})}
                       className="text-[9px] uppercase tracking-widest border border-white/10 px-3 py-1 hover:bg-white/5"
                     >
                       + Add Record
@@ -710,7 +835,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         <div className="grid grid-cols-[100px_1fr] gap-4">
                           <input 
                             placeholder="YEAR"
-                            value={exp.year}
+                            value={exp.year || ''}
                             onChange={e => {
                               const newCareer = [...aboutData.career];
                               newCareer[idx].year = e.target.value;
@@ -720,7 +845,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           />
                           <input 
                             placeholder="TITLED POSITION / PROJECT"
-                            value={exp.title}
+                            value={exp.title || ''}
                             onChange={e => {
                               const newCareer = [...aboutData.career];
                               newCareer[idx].title = e.target.value;
@@ -731,7 +856,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         </div>
                         <textarea 
                           placeholder="DESCRIPTION / ACHIEVEMENTS"
-                          value={exp.content}
+                          value={exp.content || ''}
                           onChange={e => {
                             const newCareer = [...aboutData.career];
                             newCareer[idx].content = e.target.value;
@@ -748,7 +873,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   <div className="space-y-4">
                     <label className="text-[10px] uppercase tracking-widest text-neutral-500">Expertise (Skills)</label>
                     <textarea 
-                      value={(aboutData.skills || []).join('\n')}
+                      value={(aboutData.skills || []).join('\n') || ''}
                       onChange={e => setAboutData({...aboutData, skills: e.target.value.split('\n')})}
                       className="w-full bg-neutral-900 border border-white/5 p-3 text-xs tracking-widest focus:outline-none focus:border-white h-32"
                       placeholder="One item per line"
@@ -757,7 +882,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   <div className="space-y-4">
                     <label className="text-[10px] uppercase tracking-widest text-neutral-500">Artifacts (Tools)</label>
                     <textarea 
-                      value={(aboutData.tools || []).join('\n')}
+                      value={(aboutData.tools || []).join('\n') || ''}
                       onChange={e => setAboutData({...aboutData, tools: e.target.value.split('\n')})}
                       className="w-full bg-neutral-900 border border-white/5 p-3 text-xs tracking-widest focus:outline-none focus:border-white h-32"
                       placeholder="One item per line"
@@ -784,10 +909,106 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               ) : (
                 items.map((item) => (
                   <div key={item.id} className="grid grid-cols-1 md:grid-cols-[300px_1fr] gap-8 p-6 bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors relative">
-                    {/* Order Controls */}
+                    {/* Order & Move Controls */}
                     <div className="absolute top-0 right-0 z-10 flex items-center border-l border-b border-white/10 bg-black/40 backdrop-blur-sm">
-                      <div className="px-3 font-mono text-[10px] text-neutral-400 tracking-tighter">
-                        {String(item.order || 0).padStart(4, '0')}
+                      <div className="flex items-center px-2 gap-2 border-r border-white/10">
+                        <select 
+                          className="bg-transparent text-[8px] uppercase tracking-widest text-neutral-400 focus:outline-none cursor-pointer py-2 max-w-[120px]"
+                          value={pendingMoves[item.id] || ""}
+                          onChange={(e) => setPendingMoves(prev => ({ ...prev, [item.id]: e.target.value }))}
+                        >
+                          <option value="" disabled className="bg-neutral-900 border-none">TARGET GALLERY...</option>
+                          {Object.entries(allCategoriesMap).map(([type, cats]) => (
+                            <optgroup key={type} label={type.toUpperCase()} className="bg-neutral-900 text-neutral-500 text-[10px]">
+                              {cats.map(c => (
+                                <option key={`${type}-${c}`} value={`${type}|${c}`} className="bg-neutral-900 text-white">{c}</option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </select>
+                        {pendingMoves[item.id] && (
+                          <div className="flex items-center gap-1">
+                            {confirmingMoveId === item.id ? (
+                              <>
+                                <button 
+                                  type="button"
+                                  onClick={() => {
+                                    handleMoveToLocation(item.id, pendingMoves[item.id]);
+                                    setConfirmingMoveId(null);
+                                    setPendingMoves(prev => {
+                                      const next = { ...prev };
+                                      delete next[item.id];
+                                      return next;
+                                    });
+                                  }}
+                                  className="bg-green-600 hover:bg-green-500 text-[8px] px-2 py-1 rounded-sm font-bold transition-colors ml-1"
+                                >
+                                  YES, MOVE
+                                </button>
+                                <button 
+                                  type="button"
+                                  onClick={() => setConfirmingMoveId(null)}
+                                  className="bg-neutral-700 hover:bg-neutral-600 text-[8px] px-2 py-1 rounded-sm font-bold transition-colors"
+                                >
+                                  NO
+                                </button>
+                              </>
+                            ) : (
+                              <button 
+                                type="button"
+                                onClick={() => setConfirmingMoveId(item.id)}
+                                className="bg-blue-600 hover:bg-blue-500 text-[8px] px-2 py-1 rounded-sm font-bold transition-colors cursor-pointer relative z-[30] ml-1"
+                              >
+                                MOVE
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="px-3 flex items-center gap-1 border-r border-white/10 h-full">
+                        <input 
+                          type="text"
+                          className="bg-transparent font-mono text-[10px] text-neutral-400 tracking-tighter w-12 text-center focus:outline-none focus:text-white"
+                          value={editingOrders[item.id] !== undefined ? editingOrders[item.id] : String(item.order || 0).padStart(4, '0')}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/\D/g, '').slice(0, 4);
+                            setEditingOrders(prev => ({ ...prev, [item.id]: val }));
+                          }}
+                        />
+                        {editingOrders[item.id] !== undefined && editingOrders[item.id] !== String(item.order || 0).padStart(4, '0') && (
+                          <button 
+                            onClick={async () => {
+                              const newOrder = parseInt(editingOrders[item.id]);
+                              if (!isNaN(newOrder)) {
+                                setLoading(true);
+                                try {
+                                  const { error } = await supabase
+                                    .from('gallery_items')
+                                    .update({ order: newOrder })
+                                    .eq('id', item.id);
+                                  if (error) throw error;
+                                  
+                                  // Reset editing state for this item
+                                  setEditingOrders(prev => {
+                                    const next = { ...prev };
+                                    delete next[item.id];
+                                    return next;
+                                  });
+                                  
+                                  // Refresh data locally
+                                  fetchItems();
+                                } catch (err) {
+                                  console.error(err);
+                                  alert('Failed to update order');
+                                  setLoading(false);
+                                }
+                              }
+                            }}
+                            className="bg-white text-black text-[8px] font-bold px-1.5 py-0.5 rounded-sm hover:bg-neutral-200 transition-colors"
+                          >
+                            OK
+                          </button>
+                        )}
                       </div>
                       <button 
                         onClick={() => handleAdjustOrder(item.id, 1)}
@@ -877,7 +1098,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <div className="space-y-1 col-span-2">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-500">Art Title</label>
                         <input 
-                          value={item.title}
+                          value={item.title || ''}
                           onChange={e => handleUpdateItem(item.id, { title: e.target.value })}
                           className="w-full bg-transparent border-b border-white/10 py-1 focus:outline-none focus:border-white text-sm"
                         />
@@ -885,7 +1106,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-500">Category</label>
                         <select 
-                          value={item.category}
+                          value={item.category || ''}
                           onChange={e => handleUpdateItem(item.id, { category: e.target.value })}
                           className="w-full bg-transparent border-b border-white/10 py-1 focus:outline-none focus:border-white text-sm"
                         >
@@ -898,7 +1119,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-500">Client</label>
                         <input 
-                          value={item.client}
+                          value={item.client || ''}
                           onChange={e => handleUpdateItem(item.id, { client: e.target.value })}
                           className="w-full bg-transparent border-b border-white/10 py-1 focus:outline-none focus:border-white text-sm"
                         />
@@ -906,15 +1127,129 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-500">Year</label>
                         <input 
-                          value={item.year}
+                          value={item.year || ''}
                           onChange={e => handleUpdateItem(item.id, { year: e.target.value })}
                           className="w-full bg-transparent border-b border-white/10 py-1 focus:outline-none focus:border-white text-sm"
                         />
                       </div>
+                      <div className="space-y-1">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[9px] uppercase tracking-widest text-neutral-500">Dimensions (W x H)</label>
+                          {item.width && item.height && (
+                            <span className="text-[8px] text-blue-400 font-mono">{(item.height / item.width).toFixed(2)}</span>
+                          )}
+                        </div>
+                        <div className="flex gap-2 items-end">
+                          <div className="flex flex-col">
+                            <span className="text-[7px] text-neutral-600 uppercase mb-0.5">W</span>
+                            <input 
+                              placeholder="W"
+                              value={editingDimensions[item.id]?.width ?? (item.width || '')}
+                              onChange={e => setEditingDimensions(prev => ({
+                                ...prev,
+                                [item.id]: {
+                                  width: e.target.value,
+                                  height: editingDimensions[item.id]?.height ?? (item.height?.toString() || '')
+                                }
+                              }))}
+                              className="w-12 bg-transparent border-b border-white/10 py-1 focus:outline-none focus:border-white text-xs font-mono text-center"
+                            />
+                          </div>
+                          <span className="text-neutral-600 pb-1">×</span>
+                          <div className="flex flex-col">
+                            <span className="text-[7px] text-neutral-600 uppercase mb-0.5">H</span>
+                            <input 
+                              placeholder="H"
+                              value={editingDimensions[item.id]?.height ?? (item.height || '')}
+                              onChange={e => setEditingDimensions(prev => ({
+                                ...prev,
+                                [item.id]: {
+                                  width: editingDimensions[item.id]?.width ?? (item.width?.toString() || ''),
+                                  height: e.target.value
+                                }
+                              }))}
+                              className="w-12 bg-transparent border-b border-white/10 py-1 focus:outline-none focus:border-white text-xs font-mono text-center"
+                            />
+                          </div>
+                          
+                          <div className="flex flex-col ml-4">
+                            <span className="text-[7px] text-neutral-600 uppercase mb-0.5">Ratio</span>
+                            <input 
+                              placeholder="1.4"
+                              value={editingDimensions[item.id]?.ratio ?? (item.width && item.height ? (item.height / item.width).toFixed(2) : '')}
+                              onChange={e => {
+                                const ratioVal = e.target.value;
+                                const r = parseFloat(ratioVal);
+                                if (!isNaN(r)) {
+                                  // Auto-calculate W/H based on ratio if user edits ratio
+                                  // We'll use 1000 as a base width for standardizing
+                                  setEditingDimensions(prev => ({
+                                    ...prev,
+                                    [item.id]: {
+                                      width: "1000",
+                                      height: Math.round(1000 * r).toString(),
+                                      ratio: ratioVal
+                                    }
+                                  }));
+                                } else {
+                                  setEditingDimensions(prev => ({
+                                    ...prev,
+                                    [item.id]: {
+                                      ...prev[item.id],
+                                      ratio: ratioVal
+                                    }
+                                  }));
+                                }
+                              }}
+                              className="w-12 bg-transparent border-b border-blue-400/30 py-1 focus:outline-none focus:border-blue-400 text-xs font-mono text-center text-blue-400"
+                            />
+                          </div>
+                          
+                          {(editingDimensions[item.id]) && (
+                            <button 
+                              onClick={async () => {
+                                const dims = editingDimensions[item.id];
+                                const w = parseInt(dims.width);
+                                const h = parseInt(dims.height);
+                                
+                                if (!isNaN(w) && !isNaN(h)) {
+                                  try {
+                                    const { error } = await supabase
+                                      .from('gallery_items')
+                                      .update({ width: w, height: h })
+                                      .eq('id', item.id);
+                                    
+                                    if (error) throw error;
+                                    
+                                    setItems(prev => prev.map(i => i.id === item.id ? { ...i, width: w, height: h } : i));
+                                    setSaveSuccess(item.id);
+                                    setEditingDimensions(prev => {
+                                      const next = { ...prev };
+                                      delete next[item.id];
+                                      return next;
+                                    });
+                                    setTimeout(() => setSaveSuccess(null), 2000);
+                                  } catch (err) {
+                                    console.error(err);
+                                    alert('Failed to update dimensions');
+                                  }
+                                }
+                              }}
+                              className="text-white hover:text-blue-400 p-1 mb-1 transition-colors ml-2"
+                              title="Confirm Dimensions"
+                            >
+                              <Check className={`w-3 h-3 ${saveSuccess === item.id ? 'text-green-400' : ''}`} />
+                            </button>
+                          )}
+                          {saveSuccess === item.id && (
+                            <span className="text-[8px] text-green-400 font-bold animate-pulse pb-1">OK</span>
+                          )}
+                        </div>
+                      </div>
                       <div className="space-y-1 col-span-2">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-500">Description</label>
                         <textarea 
-                          value={item.description}
+                          value={item.description || ''}
                           onChange={e => handleUpdateItem(item.id, { description: e.target.value })}
                           className="w-full bg-transparent border border-white/10 rounded-sm p-3 focus:outline-none focus:border-white text-sm h-20 resize-none"
                         />
@@ -955,7 +1290,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   >
                     {newArt.file ? (
                       <div className="relative w-full h-full">
-                        <img src={URL.createObjectURL(newArt.file)} className="w-full h-full object-cover" />
+                        <img src={previewUrl || ''} className="w-full h-full object-cover" />
                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
                           <Check className="w-8 h-8 text-green-400" />
                         </div>
@@ -976,7 +1311,26 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
-                        if (file) setNewArt({...newArt, file});
+                        if (file) {
+                          // Set file immediately
+                          setNewArt(prev => ({ ...prev, file }));
+                          
+                          // Clean up old preview
+                          if (previewUrl) URL.revokeObjectURL(previewUrl);
+                          const newUrl = URL.createObjectURL(file);
+                          setPreviewUrl(newUrl);
+
+                          // Extract dimensions
+                          const img = new Image();
+                          img.onload = () => {
+                            setNewArt(prev => ({
+                              ...prev, 
+                              width: img.naturalWidth, 
+                              height: img.naturalHeight 
+                            }));
+                          };
+                          img.src = newUrl;
+                        }
                       }}
                     />
                   </div>
@@ -1006,7 +1360,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       className="hidden"
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
-                        if (file) setNewArt({...newArt, manualThumbnailFile: file});
+                        if (file) setNewArt(prev => ({...prev, manualThumbnailFile: file}));
                       }}
                     />
                   </div>
@@ -1016,7 +1370,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <label className="text-[9px] uppercase tracking-widest text-neutral-500">Title</label>
                       <input 
                         required
-                        value={newArt.title}
+                        value={newArt.title || ''}
                         onChange={e => setNewArt({...newArt, title: e.target.value})}
                         className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
                       />
@@ -1025,7 +1379,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                       <label className="text-[9px] uppercase tracking-widest text-neutral-500">Categorization</label>
                       <select 
                         required
-                        value={newArt.category}
+                        value={newArt.category || ''}
                         onChange={e => setNewArt({...newArt, category: e.target.value})}
                         className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
                       >
@@ -1038,7 +1392,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                     <div className="space-y-1">
                       <label className="text-[9px] uppercase tracking-widest text-neutral-500">Client</label>
                       <input 
-                        value={newArt.client}
+                        value={newArt.client || ''}
                         onChange={e => setNewArt({...newArt, client: e.target.value})}
                         className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
                       />
@@ -1051,7 +1405,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                     <div className="space-y-1">
                       <label className="text-[9px] uppercase tracking-widest text-neutral-500">Year</label>
                       <input 
-                        value={newArt.year}
+                        value={newArt.year || ''}
                         onChange={e => setNewArt({...newArt, year: e.target.value})}
                         className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
                       />
@@ -1061,16 +1415,24 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                     <label className="text-[9px] uppercase tracking-widest text-neutral-500">Extended Description</label>
                     <textarea 
                       required
-                      value={newArt.description}
+                      value={newArt.description || ''}
                       onChange={e => setNewArt({...newArt, description: e.target.value})}
                       className="w-full bg-transparent border border-white/10 rounded-sm p-4 focus:outline-none focus:border-white text-sm h-32 resize-none"
                     />
                   </div>
                   <button 
                     type="submit"
-                    className="w-full bg-white text-black py-4 text-[11px] font-bold uppercase tracking-[0.3em] hover:bg-neutral-200 transition-all mt-8"
+                    disabled={loading}
+                    className={`w-full bg-white text-black py-4 text-[11px] font-bold uppercase tracking-[0.3em] transition-all mt-8 flex items-center justify-center gap-2 ${loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-200'}`}
                   >
-                    Archive Art
+                    {loading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                        Archiving...
+                      </>
+                    ) : (
+                      'Archive Art'
+                    )}
                   </button>
                 </div>
               </form>
@@ -1130,7 +1492,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
               <div className="flex gap-2">
                 <input 
-                  value={newCatName}
+                  value={newCatName || ''}
                   onChange={e => setNewCatName(e.target.value)}
                   placeholder="NEW CLASSIFICATION"
                   className="flex-grow bg-black border-b border-white/10 py-3 px-4 focus:outline-none focus:border-white text-[10px] tracking-widest"
@@ -1140,6 +1502,48 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   className="bg-white text-black px-4 flex items-center justify-center"
                 >
                   <Plus className="w-4 h-4" />
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {showDeleteModal && itemToDelete && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-neutral-900 border border-white/10 p-8 rounded-sm shadow-2xl"
+            >
+              <h3 className="text-sm tracking-[0.2em] font-light uppercase mb-6 text-red-500">Confirm Deletion</h3>
+              <p className="text-xs text-neutral-400 tracking-widest leading-relaxed mb-8">
+                Are you sure you want to permanently delete <span className="text-white font-bold">"{itemToDelete.title}"</span>? This action cannot be undone.
+              </p>
+              
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => {
+                    setShowDeleteModal(false);
+                    setItemToDelete(null);
+                  }}
+                  className="flex-1 border border-white/10 text-white py-3 text-[9px] font-bold uppercase tracking-widest hover:bg-white/5 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={executeDelete}
+                  disabled={loading}
+                  className="flex-1 bg-red-600 text-white py-3 text-[9px] font-bold uppercase tracking-widest hover:bg-red-500 transition-colors flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <RefreshCcw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <>Delete Art</>
+                  )}
                 </button>
               </div>
             </motion.div>
