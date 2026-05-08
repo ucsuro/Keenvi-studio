@@ -31,7 +31,27 @@ export default function Gallery({ type, subCategory }: Props) {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [columnsCount, setColumnsCount] = useState(4);
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+
+  useEffect(() => {
+    if (isZoomed && scrollContainerRef.current) {
+      const container = scrollContainerRef.current;
+      // Use setTimeout to ensure the layout has recalculated after the state change
+      setTimeout(() => {
+        const scrollWidth = container.scrollWidth;
+        const scrollHeight = container.scrollHeight;
+        const clientWidth = container.clientWidth;
+        const clientHeight = container.clientHeight;
+
+        container.scrollTo({
+          left: (scrollWidth - clientWidth) / 2,
+          top: (scrollHeight - clientHeight) / 2,
+          behavior: 'instant' as any
+        });
+      }, 10);
+    }
+  }, [isZoomed, selectedIndex]);
 
   useEffect(() => {
     const updateColumns = () => {
@@ -244,28 +264,25 @@ export default function Gallery({ type, subCategory }: Props) {
             </div>
 
             {/* Navigation Buttons */}
-            {!isZoomed && (
-              <>
-                <button
-                  onClick={prevImage}
-                  className="absolute left-10 top-1/2 -translate-y-1/2 text-neutral-600 hover:text-white transition-colors z-[10001]"
-                >
-                  <ChevronLeft className="w-16 h-16" />
-                </button>
-                <button
-                  onClick={nextImage}
-                  className="absolute right-10 top-1/2 -translate-y-1/2 text-neutral-600 hover:text-white transition-colors z-[10001]"
-                >
-                  <ChevronRight className="w-16 h-16" />
-                </button>
-              </>
-            )}
+            <button
+              onClick={prevImage}
+              className="absolute left-4 md:left-10 top-1/2 -translate-y-1/2 text-white/30 hover:text-white transition-colors z-[10005] p-2 hover:bg-black/20 rounded-full"
+            >
+              <ChevronLeft className="w-12 h-12 md:w-16 md:h-16" />
+            </button>
+            <button
+              onClick={nextImage}
+              className="absolute right-4 md:right-10 top-1/2 -translate-y-1/2 text-white/30 hover:text-white transition-colors z-[10005] p-2 hover:bg-black/20 rounded-full"
+            >
+              <ChevronRight className="w-12 h-12 md:w-16 md:h-16" />
+            </button>
 
             {/* Image Stage */}
             <div 
+              ref={scrollContainerRef}
               className={cn(
                 "relative flex-grow flex p-0 md:p-12 w-full h-full custom-scrollbar",
-                isZoomed ? "overflow-auto items-start justify-center" : "overflow-hidden items-center justify-center cursor-zoom-in"
+                isZoomed ? "overflow-auto block" : "overflow-hidden items-center justify-center cursor-zoom-in"
               )}
               onClick={(e) => {
                 if (e.target === e.currentTarget) setIsZoomed(!isZoomed);
@@ -281,8 +298,8 @@ export default function Gallery({ type, subCategory }: Props) {
                   y: 0
                 }}
                 className={cn(
-                  "relative origin-top flex items-center justify-center",
-                  isZoomed ? "w-auto h-auto py-20" : "w-full h-full max-w-[100vw] max-h-[98vh]"
+                  "relative origin-center flex items-center justify-center",
+                  isZoomed ? "w-fit h-fit min-w-full min-h-full p-5" : "w-full h-full max-w-[100vw] max-h-[98vh]"
                 )}
               >
                 <img
@@ -290,7 +307,7 @@ export default function Gallery({ type, subCategory }: Props) {
                   src={items[selectedIndex].imageUrl}
                   alt={items[selectedIndex].title}
                   className={cn(
-                    "shadow-2xl",
+                    "shadow-2xl flex-shrink-0",
                     isZoomed ? "max-w-none cursor-zoom-out" : "w-auto h-auto max-w-full max-h-full object-contain"
                   )}
                   onClick={() => setIsZoomed(!isZoomed)}
