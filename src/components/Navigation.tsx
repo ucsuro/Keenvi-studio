@@ -94,8 +94,8 @@ export default function Navigation({ activePage, onNavigate, categories, isLogge
         </div>
 
         {/* Mobile Menu Button */}
-        <button className="md:hidden" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
-          {isMobileMenuOpen ? <X /> : <Menu />}
+        <button className="md:hidden text-white" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
+          {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
         </button>
       </div>
 
@@ -106,40 +106,61 @@ export default function Navigation({ activePage, onNavigate, categories, isLogge
             initial={{ opacity: 0, x: '100%' }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: '100%' }}
-            className="fixed inset-0 top-20 bg-[#050505] z-40 md:hidden overflow-y-auto px-6 py-8"
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="fixed inset-0 top-20 bg-[#050505] z-40 md:hidden overflow-y-auto px-10 py-12"
           >
-            <div className="flex flex-col space-y-6">
-              {menuItems.map((item) => (
-                <div key={item} className="space-y-4">
-                  <button
-                    onClick={() => {
-                      if (!getSubCategories(item)) {
-                        onNavigate(item as any);
-                        setIsMobileMenuOpen(false);
-                      }
-                    }}
-                    className="text-2xl font-display font-medium text-left w-full"
-                  >
-                    {item}
-                  </button>
-                  {getSubCategories(item) && (
-                    <div className="pl-4 flex flex-col space-y-3 border-l border-neutral-800">
-                      {getSubCategories(item)?.map((sub) => (
-                        <button
-                          key={sub}
-                          onClick={() => {
-                            onNavigate(item as any, sub);
-                            setIsMobileMenuOpen(false);
-                          }}
-                          className="text-neutral-400 text-left hover:text-white text-[13px] py-1"
-                        >
-                          {sub}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+            <div className="flex flex-col space-y-10">
+              {menuItems.map((item) => {
+                const subCats = getSubCategories(item);
+                const hasSubs = subCats && subCats.length > 0;
+                
+                return (
+                  <div key={item} className="space-y-4">
+                    <button
+                      onClick={() => {
+                        if (!hasSubs) {
+                          onNavigate(item as any);
+                          setIsMobileMenuOpen(false);
+                        }
+                      }}
+                      className={cn(
+                        "text-3xl font-display font-light text-left w-full tracking-wider transition-colors",
+                        activePage === item ? "text-white" : "text-neutral-500"
+                      )}
+                    >
+                      {item}
+                    </button>
+                    {hasSubs && (
+                      <div className="pl-4 flex flex-col space-y-4 border-l border-white/10 mt-2">
+                        {subCats.map((sub) => (
+                          <button
+                            key={sub}
+                            onClick={() => {
+                              onNavigate(item as any, sub);
+                              setIsMobileMenuOpen(false);
+                            }}
+                            className="text-neutral-400 text-left hover:text-white text-base py-1 tracking-wide"
+                          >
+                            {sub}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              
+              {isLoggedIn && (
+                <button 
+                  onClick={() => {
+                    onNavigate('Admin');
+                    setIsMobileMenuOpen(false);
+                  }}
+                  className="text-neutral-500 text-sm uppercase tracking-[0.3em] font-mono pt-10 border-t border-white/5"
+                >
+                  / Modify (Admin)
+                </button>
+              )}
             </div>
           </motion.div>
         )}
