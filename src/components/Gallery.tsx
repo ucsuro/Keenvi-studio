@@ -146,14 +146,21 @@ export default function Gallery({ type, subCategory }: Props) {
 
   items.forEach((item, index) => {
     // Find the index of the column with the minimum height
-    const shortestIndex = columnHeights.indexOf(Math.min(...columnHeights));
+    const minHeight = Math.min(...columnHeights);
+    const shortestIndex = columnHeights.indexOf(minHeight);
     
-    columnData[shortestIndex].push(item);
+    // Safety check: if shortestIndex is -1 (shouldn't happen with 1+ columns), fallback to 0
+    const targetIdx = shortestIndex === -1 ? 0 : shortestIndex;
+    
+    columnData[targetIdx].push(item);
     
     // Update the column height based on aspect ratio
-    // If original width/height missing, use a pseudo-random fallback based on index to ensure column variation
-    const ratio = (item.height && item.width) ? (item.height / item.width) : (1.2 + (index % 5) * 0.1);
-    columnHeights[shortestIndex] += ratio;
+    // Force numbers and check validity to prevent NaN
+    const h = Number(item.height);
+    const w = Number(item.width);
+    const ratio = (h > 0 && w > 0) ? (h / w) : (1.2 + (index % 5) * 0.1);
+    
+    columnHeights[targetIdx] += isNaN(ratio) ? 1.5 : ratio;
   });
 
   return (

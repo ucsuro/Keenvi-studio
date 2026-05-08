@@ -46,6 +46,8 @@ export default function App() {
     fetchCategories();
     
     // Auth state listener
+    if (!supabase) return;
+    
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session) {
         setIsLoggedIn(true);
