@@ -61,7 +61,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   const [aboutData, setAboutData] = useState<{
     title: string;
     description: string;
-    bio: string;
+    bio_en: string;
+    bio_ko: string;
+    freelanceProjects: Array<{ company: string; project: string; work: string; year: string }>;
     career: Array<{ year: string; title: string; content: string }>;
     skills: string[];
     tools: string[];
@@ -72,10 +74,10 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     headline: string;
     links: {
       artstation: string;
+      youtube: string;
       instagram: string;
       linkedin: string;
       facebook: string;
-      naver: string;
       twitter: string;
     };
     gateways: {
@@ -714,7 +716,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                 <div className="space-y-6">
                   <h3 className="text-xs font-bold uppercase tracking-widest text-neutral-500 border-b border-white/5 pb-2">External Links</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {['artstation', 'linkedin', 'twitter', 'facebook', 'instagram', 'naver'].map((key) => (
+                    {['artstation', 'youtube', 'linkedin', 'twitter', 'facebook', 'instagram'].map((key) => (
                       <div key={key} className="space-y-1">
                         <label className="text-[9px] uppercase tracking-widest text-neutral-600">{key}</label>
                         <input 
@@ -800,14 +802,106 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                     className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400 h-24"
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] uppercase tracking-widest text-neutral-500">Detailed Biography</label>
+                <div className="space-y-4">
+                  <label className="text-[10px] uppercase tracking-widest text-neutral-500">English Bio</label>
                   <textarea 
-                    value={aboutData.bio || ''}
-                    onChange={e => setAboutData({...aboutData, bio: e.target.value})}
-                    className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400 h-48"
+                    value={aboutData.bio_en || ''}
+                    onChange={e => setAboutData({...aboutData, bio_en: e.target.value})}
+                    className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400 h-48 text-sm leading-relaxed"
+                    placeholder="English biography..."
                   />
                 </div>
+                <div className="space-y-4">
+                  <label className="text-[10px] uppercase tracking-widest text-neutral-500">Korean Bio (한글 소개)</label>
+                  <textarea 
+                    value={aboutData.bio_ko || ''}
+                    onChange={e => setAboutData({...aboutData, bio_ko: e.target.value})}
+                    className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-blue-400 h-48 text-sm leading-relaxed"
+                    placeholder="한국어 소개글..."
+                  />
+                </div>
+
+                <div className="space-y-4 pt-8 border-t border-white/5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold">Freelance Projects</label>
+                    <button 
+                      onClick={() => setAboutData({
+                        ...aboutData, 
+                        freelanceProjects: [{ company: '', project: '', work: '', year: '' }, ...(aboutData.freelanceProjects || [])]
+                      })}
+                      className="text-[9px] uppercase tracking-widest text-blue-400 hover:text-white transition-colors"
+                    >
+                      + Add Project
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    {(aboutData.freelanceProjects || []).map((p, idx) => (
+                      <div key={idx} className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white/[0.02] p-4 rounded-sm relative group">
+                        <div className="space-y-1">
+                          <label className="text-[8px] uppercase text-neutral-600">Company</label>
+                          <input 
+                            value={p.company}
+                            onChange={e => {
+                              const newList = [...aboutData.freelanceProjects];
+                              newList[idx].company = e.target.value;
+                              setAboutData({...aboutData, freelanceProjects: newList});
+                            }}
+                            className="w-full bg-neutral-900 border border-white/5 rounded-sm px-3 py-2 focus:outline-none focus:border-blue-400 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[8px] uppercase text-neutral-600">Project</label>
+                          <input 
+                            value={p.project}
+                            onChange={e => {
+                              const newList = [...aboutData.freelanceProjects];
+                              newList[idx].project = e.target.value;
+                              setAboutData({...aboutData, freelanceProjects: newList});
+                            }}
+                            className="w-full bg-neutral-900 border border-white/5 rounded-sm px-3 py-2 focus:outline-none focus:border-blue-400 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[8px] uppercase text-neutral-600">Work/Ref</label>
+                          <input 
+                            value={p.work}
+                            onChange={e => {
+                              const newList = [...aboutData.freelanceProjects];
+                              newList[idx].work = e.target.value;
+                              setAboutData({...aboutData, freelanceProjects: newList});
+                            }}
+                            className="w-full bg-neutral-900 border border-white/5 rounded-sm px-3 py-2 focus:outline-none focus:border-blue-400 text-sm"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[8px] uppercase text-neutral-600">Year</label>
+                          <div className="flex gap-2">
+                            <input 
+                              value={p.year}
+                              onChange={e => {
+                                const newList = [...aboutData.freelanceProjects];
+                                newList[idx].year = e.target.value;
+                                setAboutData({...aboutData, freelanceProjects: newList});
+                              }}
+                              className="w-full bg-neutral-900 border border-white/5 rounded-sm px-3 py-2 focus:outline-none focus:border-blue-400 text-sm"
+                            />
+                            <button 
+                              onClick={() => {
+                                const newList = aboutData.freelanceProjects.filter((_, i) => i !== idx);
+                                setAboutData({...aboutData, freelanceProjects: newList});
+                              }}
+                              className="text-red-500/50 hover:text-red-500 px-2"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
                 <div className="space-y-4 pt-8 border-t border-white/5">
                   <div className="flex justify-between items-center mb-4">
                     <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-neutral-400">Chronicle (Career)</h3>

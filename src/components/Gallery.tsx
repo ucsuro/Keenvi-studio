@@ -46,7 +46,7 @@ export default function Gallery({ type, subCategory }: Props) {
 
         container.scrollTo({
           left: (scrollWidth - clientWidth) / 2,
-          top: (scrollHeight - clientHeight) / 2,
+          top: 0,
           behavior: 'instant' as any
         });
       }, 10);
@@ -186,8 +186,8 @@ export default function Gallery({ type, subCategory }: Props) {
   return (
     <div className="w-full max-w-[2400px] mx-auto px-6 md:px-10 py-12">
       <div className="mb-16">
-        <h2 className="text-3xl font-light tracking-[0.2em] mb-6">
-          <span className="uppercase">{type}</span> {subCategory && <span className="text-neutral-500 font-sans font-normal tracking-normal ml-2">/ {subCategory}</span>}
+        <h2 className="text-sm sm:text-3xl font-light tracking-[0.12em] sm:tracking-[0.2em] mb-3 sm:mb-6">
+          <span className="uppercase">{type}</span> {subCategory && <span className="text-neutral-500 font-sans font-normal tracking-normal ml-1 sm:ml-2">/ {subCategory}</span>}
         </h2>
         <div className="h-px bg-white/5 w-full" />
       </div>
@@ -298,8 +298,8 @@ export default function Gallery({ type, subCategory }: Props) {
                   y: 0
                 }}
                 className={cn(
-                  "relative origin-center flex items-center justify-center",
-                  isZoomed ? "w-fit h-fit min-w-full min-h-full p-5" : "w-full h-full max-w-[100vw] max-h-[98vh]"
+                  "relative flex justify-center",
+                  isZoomed ? "items-start w-fit h-fit min-w-full min-h-full" : "items-center origin-center w-full h-full max-w-[100vw] max-h-[98vh]"
                 )}
               >
                 <img

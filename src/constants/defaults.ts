@@ -2,9 +2,9 @@ export const DEFAULT_INTRO = {
     "headline": "Visual Storyteller & Concept Artist based in Seoul.",
     "links": {
       "artstation": "https://www.artstation.com/seunghee",
+      "youtube": "",
       "instagram": "https://www.instagram.com/ch1_art/",
       "linkedin": "https://www.linkedin.com/in/mixedcolor/",
-      "naver": "https://blog.naver.com/ucsuro",
       "twitter": "https://x.com/ch1art",
       "facebook": "https://www.facebook.com/seunghee3/"
     },
@@ -19,7 +19,22 @@ export const DEFAULT_INTRO = {
 export const DEFAULT_ABOUT = {
     "title": "KeenVi Studio",
     "description": "KeenVi Studio is a premier concept art and illustration studio specializing in cinematic visuals for games and media.",
-    "bio": "Led by visionary artists, KeenVi Studio has been a cornerstone in the art industry for over a decade, providing high-quality art outsourcing for global clients.",
+    "bio_en": "Led by visionary artists, KeenVi Studio has been a cornerstone in the art industry for over a decade, providing high-quality art outsourcing for global clients.",
+    "bio_ko": "역동적인 아티스트들이 이끄는 KeenVi Studio는 10년 이상 전 세계 고객들에게 고품질의 아트 아웃소싱 서비스를 제공하며 업계의 초석이 되어왔습니다.",
+    "freelanceProjects": [
+      {
+        "company": "Riot Games",
+        "project": "League of Legends",
+        "work": "Splash Art & Concept Design",
+        "year": "2023"
+      },
+      {
+        "company": "Nexon",
+        "project": "Project Overkill",
+        "work": "Main Character Concept",
+        "year": "2022"
+      }
+    ],
     "career": [
       {
         "year": "2020-Present",
