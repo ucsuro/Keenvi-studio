@@ -187,7 +187,7 @@ export default function Gallery({ type, subCategory }: Props) {
     <div className="w-full max-w-[2400px] mx-auto px-6 md:px-10 py-12">
       <div className="mb-16">
         <h2 className="text-xl sm:text-3xl font-light tracking-[0.12em] sm:tracking-[0.2em] mb-4 sm:mb-6">
-          <span className="uppercase">{type}</span> {subCategory && <span className="text-neutral-500 font-sans font-normal tracking-normal ml-1 sm:ml-2 text-[18px]">/ {subCategory}</span>}
+          <span className="uppercase">{type}</span> {subCategory && <span className="text-neutral-400 font-sans font-normal tracking-normal ml-1 sm:ml-5 text-[18px] sm:text-[23px]">  {subCategory}</span>}
         </h2>
         <div className="h-px bg-white/5 w-full" />
       </div>
@@ -335,7 +335,7 @@ export default function Gallery({ type, subCategory }: Props) {
                     </p>
 
                     {items[selectedIndex].description && (
-                      <p className="hidden md:block text-[10px] font-light text-neutral-500 italic border-l border-neutral-800 pl-4 max-w-[900px] line-clamp-3 leading-relaxed whitespace-pre-line tracking-tight">
+                      <p className="hidden md:block text-[11px] font-light text-neutral-400 italic border-l border-neutral-800 pl-4 pr-4 max-w-[900px] line-clamp-3 leading-relaxed whitespace-pre-line tracking-tight">
                         {items[selectedIndex].description}
                       </p>
                     )}
