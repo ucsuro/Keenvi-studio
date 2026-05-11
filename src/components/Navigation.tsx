@@ -57,7 +57,7 @@ export default function Navigation({ activePage, onNavigate, categories, isLogge
                   onClick={() => onNavigate(item as any)}
                   className={cn(
                     "text-[10px] lg:text-[11px] font-medium tracking-[0.12em] lg:tracking-[0.15em] uppercase flex items-center transition-all py-2",
-                    activePage === item ? "text-white border-b border-white" : "text-neutral-500 hover:text-white"
+                    activePage === item ? "text-white border-b border-white" : "text-neutral-400 hover:text-white"
                   )}
                 >
                   {item}
@@ -138,8 +138,8 @@ export default function Navigation({ activePage, onNavigate, categories, isLogge
                           setIsMobileMenuOpen(false);
                         }}
                         className={cn(
-                          "text-[13px] font-display font-bold text-left w-full tracking-[0.05em] transition-all uppercase",
-                          activePage === item ? "text-black" : "text-neutral-400 hover:text-black"
+                          "text-[13px] font-display font-medium text-left w-full tracking-[0.06em] transition-all uppercase",
+                          activePage === item ? "text-black" : "text-neutral-500 hover:text-black"
                         )}
                       >
                         {item}
@@ -154,7 +154,7 @@ export default function Navigation({ activePage, onNavigate, categories, isLogge
                                 onNavigate(item as any, sub);
                                 setIsMobileMenuOpen(false);
                               }}
-                              className="text-neutral-400 text-left hover:text-black text-[10px] py-0.5 tracking-[0.05em] font-medium uppercase transition-colors"
+                              className="text-neutral-500 text-left hover:text-black text-[10.5px] py-0.5 tracking-[0.06em] font-medium uppercase transition-colors"
                             >
                               {sub}
                             </button>
@@ -173,7 +173,7 @@ export default function Navigation({ activePage, onNavigate, categories, isLogge
                       onNavigate('Admin');
                       setIsMobileMenuOpen(false);
                     }}
-                    className="text-neutral-400 text-[8px] uppercase tracking-[0.2em] font-mono font-bold hover:text-black transition-colors"
+                    className="text-neutral-400 text-[8px] uppercase tracking-[0.2em] font-mono font-medium hover:text-black transition-colors"
                   >
                     / SYSTEM ACCESS
                   </button>

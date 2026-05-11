@@ -186,8 +186,8 @@ export default function Gallery({ type, subCategory }: Props) {
   return (
     <div className="w-full max-w-[2400px] mx-auto px-6 md:px-10 py-12">
       <div className="mb-16">
-        <h2 className="text-sm sm:text-3xl font-light tracking-[0.12em] sm:tracking-[0.2em] mb-3 sm:mb-6">
-          <span className="uppercase">{type}</span> {subCategory && <span className="text-neutral-500 font-sans font-normal tracking-normal ml-1 sm:ml-2">/ {subCategory}</span>}
+        <h2 className="text-xl sm:text-3xl font-light tracking-[0.12em] sm:tracking-[0.2em] mb-4 sm:mb-6">
+          <span className="uppercase">{type}</span> {subCategory && <span className="text-neutral-500 font-sans font-normal tracking-normal ml-1 sm:ml-2 text-[18px]">/ {subCategory}</span>}
         </h2>
         <div className="h-px bg-white/5 w-full" />
       </div>
