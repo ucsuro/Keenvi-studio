@@ -37,7 +37,7 @@ export default function Contact() {
   }, []);
 
   const copyToClipboard = () => {
-    navigator.clipboard.writeText('ucsuro@naver.com');
+    navigator.clipboard.writeText('hello@keenvi.art');
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -78,10 +78,10 @@ export default function Contact() {
           <div className="space-y-6 text-center w-full">
             <div className="flex flex-col md:flex-row items-center justify-center gap-4 md:gap-8 group px-4">
               <a 
-                href="mailto:ucsuro@naver.com" 
+                href="mailto:hello@keenvi.art" 
                 className="text-[20px] sm:text-[30px] md:text-[36px] lg:text-[40px] text-white tracking-[0.15em] font-light hover:text-blue-400 transition-all duration-500 break-all"
               >
-                ucsuro@naver.com
+                hello@keenvi.art
               </a>
               <button 
                 onClick={copyToClipboard}

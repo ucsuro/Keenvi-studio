@@ -148,12 +148,12 @@ export default function About() {
             </div>
 
             <div className="space-y-12">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-16">
+              <div className="grid grid-cols-1 gap-12 lg:gap-16">
                 <div className="space-y-8">
                   <h3 className="uppercase text-[10px] tracking-[0.5em] font-bold text-neutral-600 mb-6 flex items-center gap-4">
                     <span className="h-px w-8 bg-white/10"></span>Expertise
                   </h3>
-                  <ul className="grid grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4 text-[11px] tracking-[0.2em] text-neutral-400">
+                  <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-4 text-[11px] tracking-[0.2em] text-neutral-400">
                     {data.skills.map(s => <li key={s} className="hover:text-white transition-colors flex items-center gap-2">
                       <span className="w-1 h-1 bg-white/20 rounded-full"></span>{s}
                     </li>)}
@@ -163,7 +163,7 @@ export default function About() {
                   <h3 className="uppercase text-[10px] tracking-[0.5em] font-bold text-neutral-600 mb-6 flex items-center gap-4">
                     <span className="h-px w-8 bg-white/10"></span>Artifacts
                   </h3>
-                  <ul className="grid grid-cols-2 md:grid-cols-1 lg:grid-cols-2 gap-4 text-[11px] tracking-[0.2em] text-neutral-400">
+                  <ul className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-4 text-[11px] tracking-[0.2em] text-neutral-400">
                     {data.tools.map(t => <li key={t} className="hover:text-white transition-colors flex items-center gap-2">
                       <span className="w-1 h-1 bg-white/20 rounded-full"></span>{t}
                     </li>)}
