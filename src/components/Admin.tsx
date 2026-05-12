@@ -63,6 +63,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     description: string;
     bio_en: string;
     bio_ko: string;
+    imageUrl?: string;
     freelanceProjects: Array<{ company: string; project: string; work: string; year: string }>;
     career: Array<{ year: string; title: string; content: string }>;
     skills: string[];
@@ -786,6 +787,48 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           ) : activeTab === 'about' ? (
             aboutData && (
               <div className="space-y-8 max-w-2xl">
+                <div className="space-y-4">
+                  <label className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold">About Main Image</label>
+                  <label className="block aspect-[4/5] w-[200px] bg-neutral-900 border border-dashed border-white/10 relative group cursor-pointer overflow-hidden rounded-sm">
+                    {aboutData.imageUrl ? (
+                      <img 
+                        src={aboutData.imageUrl} 
+                        className="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <Plus className="w-6 h-6 text-neutral-700" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity translate-y-2 group-hover:translate-y-0 transition-all duration-300 bg-black/40">
+                      <Upload className="w-6 h-6 text-white" />
+                    </div>
+                    <input 
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={async e => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setLoading(true);
+                          const result = await handleFileUpload(file);
+                          if (result) {
+                            setAboutData({
+                              ...aboutData,
+                              imageUrl: result.url
+                            });
+                          }
+                          setLoading(false);
+                        }
+                      }}
+                    />
+                  </label>
+                  <p className="text-[9px] text-neutral-600 uppercase tracking-widest">
+                    Recommended: 800x1000px (4:5 Aspect Ratio)
+                  </p>
+                </div>
+
                 <div className="space-y-2">
                   <label className="text-[10px] uppercase tracking-widest text-neutral-500">Studio Name</label>
                   <input 

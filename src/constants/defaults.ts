@@ -19,6 +19,7 @@ export const DEFAULT_INTRO = {
 export const DEFAULT_ABOUT = {
     "title": "KeenVi Studio",
     "description": "KeenVi Studio is a premier concept art and illustration studio specializing in cinematic visuals for games and media.",
+    "imageUrl": "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=800&q=80",
     "bio_en": "Led by visionary artists, KeenVi Studio has been a cornerstone in the art industry for over a decade, providing high-quality art outsourcing for global clients.",
     "bio_ko": "역동적인 아티스트들이 이끄는 KeenVi Studio는 10년 이상 전 세계 고객들에게 고품질의 아트 아웃소싱 서비스를 제공하며 업계의 초석이 되어왔습니다.",
     "freelanceProjects": [

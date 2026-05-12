@@ -8,6 +8,7 @@ interface AboutData {
   description: string;
   bio_en: string;
   bio_ko: string;
+  imageUrl?: string;
   freelanceProjects?: { company: string; project: string; work: string; year: string }[];
   career: { year: string; title: string; content: string }[];
   skills: string[];
@@ -50,7 +51,7 @@ export default function About() {
         >
           <div className="relative group overflow-hidden">
             <img 
-              src="https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=800&q=80" 
+              src={data.imageUrl || "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=800&q=80"} 
               alt="KeenVi Studio space" 
               className="w-full aspect-[4/5] object-cover rounded-sm shadow-2xl grayscale transition-all duration-1000 group-hover:grayscale-0 opacity-80 group-hover:opacity-100"
               referrerPolicy="no-referrer"
