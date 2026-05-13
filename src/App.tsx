@@ -7,6 +7,7 @@ import Contact from './components/Contact';
 import Admin from './components/Admin';
 import { cn } from './lib/utils';
 import { supabase } from './lib/supabase';
+import { trackPageView } from './lib/analytics';
 
 type Page = 'Intro' | 'Portfolio' | 'Project' | 'Personal Work' | 'About' | 'Contact' | 'Admin';
 
@@ -85,6 +86,11 @@ export default function App() {
     localStorage.removeItem('keenvi_auth');
     setActivePage('Intro');
   };
+
+  // Track page views
+  useEffect(() => {
+    trackPageView(activePage, subCategory);
+  }, [activePage, subCategory]);
 
   // Scroll to top when page changes
   useEffect(() => {

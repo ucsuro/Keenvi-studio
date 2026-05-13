@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, ChevronLeft, ChevronRight, Maximize2, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
+import { trackImageClick } from '../lib/analytics';
 
 interface GalleryItem {
   id: string;
@@ -26,6 +27,7 @@ interface Props {
 export default function Gallery({ type, subCategory }: Props) {
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [visibleCount, setVisibleCount] = useState(12);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [isZoomed, setIsZoomed] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
@@ -33,6 +35,33 @@ export default function Gallery({ type, subCategory }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+
+  // Initial calculation for visible count based on columns
+  useEffect(() => {
+    const initialCount = Math.max(12, columnsCount * 4);
+    setVisibleCount(initialCount);
+  }, [columnsCount]);
+
+  // Intersection Observer for infinite scroll
+  useEffect(() => {
+    if (loading || items.length <= visibleCount) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCount(prev => Math.min(prev + (columnsCount * 6), items.length));
+        }
+      },
+      { threshold: 0, rootMargin: '1200px' }
+    );
+
+    if (loadMoreRef.current) {
+      observer.observe(loadMoreRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [loading, items.length, visibleCount, columnsCount]);
 
   useEffect(() => {
     if (isZoomed && scrollContainerRef.current) {
@@ -110,11 +139,18 @@ export default function Gallery({ type, subCategory }: Props) {
     }
 
     fetchItems();
-  }, [type, subCategory]);
+    // Reset visible count when category change
+    setVisibleCount(Math.max(12, columnsCount * 4));
+  }, [type, subCategory, columnsCount]);
 
   const openLightbox = (index: number) => {
     setSelectedIndex(index);
     setIsZoomed(false);
+    
+    // Track image click
+    if (items[index]) {
+      trackImageClick(items[index].title);
+    }
   };
   const closeLightbox = () => {
     setSelectedIndex(null);
@@ -164,7 +200,10 @@ export default function Gallery({ type, subCategory }: Props) {
   const columnData: GalleryItem[][] = Array.from({ length: columnsCount }, () => []);
   const columnHeights = Array(columnsCount).fill(0);
 
-  items.forEach((item, index) => {
+  // Only process items up to visibleCount for the masonry layout
+  const visibleItems = items.slice(0, visibleCount);
+
+  visibleItems.forEach((item, index) => {
     // Find the index of the column with the minimum height
     const minHeight = Math.min(...columnHeights);
     const shortestIndex = columnHeights.indexOf(minHeight);
@@ -203,7 +242,10 @@ export default function Gallery({ type, subCategory }: Props) {
                   key={item.id}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: originalIndex * 0.03, duration: 0.6 }}
+                  transition={{ 
+                    delay: originalIndex < 12 ? originalIndex * 0.05 : 0.05, 
+                    duration: 0.6
+                  }}
                   className="relative group cursor-pointer overflow-hidden bg-neutral-900"
                   onClick={() => openLightbox(originalIndex)}
                 >
@@ -212,6 +254,7 @@ export default function Gallery({ type, subCategory }: Props) {
                     alt={item.title}
                     className="w-full h-auto transition-transform duration-1000 group-hover:scale-105 block"
                     referrerPolicy="no-referrer"
+                    loading="lazy"
                   />
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6">
                     <p className="text-blue-400 text-[10px] tracking-[0.2em] mb-1">{item.category}</p>
@@ -227,6 +270,13 @@ export default function Gallery({ type, subCategory }: Props) {
           </div>
         ))}
       </div>
+
+      {/* Infinite Scroll Trigger */}
+      {items.length > visibleCount && (
+        <div ref={loadMoreRef} className="h-20 w-full flex items-center justify-center mt-10">
+          <div className="w-6 h-6 border-2 border-neutral-800 border-t-white/30 rounded-full animate-spin" />
+        </div>
+      )}
 
       <AnimatePresence>
         {selectedIndex !== null && (
