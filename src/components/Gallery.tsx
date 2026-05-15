@@ -32,10 +32,15 @@ export default function Gallery({ type, subCategory }: Props) {
   const [isZoomed, setIsZoomed] = useState(false);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [columnsCount, setColumnsCount] = useState(4);
+  const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+
+  const handleImageLoad = (id: string) => {
+    setLoadedImages(prev => ({ ...prev, [id]: true }));
+  };
 
   // Initial calculation for visible count based on columns
   useEffect(() => {
@@ -50,10 +55,10 @@ export default function Gallery({ type, subCategory }: Props) {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
-          setVisibleCount(prev => Math.min(prev + (columnsCount * 6), items.length));
+          setVisibleCount(prev => Math.min(prev + (columnsCount * 5), items.length));
         }
       },
-      { threshold: 0, rootMargin: '1200px' }
+      { threshold: 0, rootMargin: '800px' }
     );
 
     if (loadMoreRef.current) {
@@ -243,16 +248,29 @@ export default function Gallery({ type, subCategory }: Props) {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ 
-                    delay: originalIndex < 12 ? originalIndex * 0.05 : 0.05, 
+                    delay: originalIndex < 12 ? originalIndex * 0.06 : 0.05, 
                     duration: 0.6
                   }}
-                  className="relative group cursor-pointer overflow-hidden bg-neutral-900"
+                  className="relative group cursor-pointer overflow-hidden bg-neutral-900 rounded-sm"
+                  style={{ 
+                    aspectRatio: item.width && item.height ? `${item.width} / ${item.height}` : undefined,
+                    minHeight: !item.width ? '200px' : undefined
+                  }}
                   onClick={() => openLightbox(originalIndex)}
                 >
+                  {/* Placeholder Skeleton */}
+                  {!loadedImages[item.id] && (
+                    <div className="absolute inset-0 bg-neutral-800/40 animate-pulse" />
+                  )}
+                  
                   <img
                     src={item.thumbnailUrl || item.imageUrl}
                     alt={item.title}
-                    className="w-full h-auto transition-transform duration-1000 group-hover:scale-105 block"
+                    onLoad={() => handleImageLoad(item.id)}
+                    className={cn(
+                      "w-full h-auto transition-all duration-1000 group-hover:scale-105 block",
+                      loadedImages[item.id] ? "opacity-100" : "opacity-0"
+                    )}
                     referrerPolicy="no-referrer"
                     loading="lazy"
                   />

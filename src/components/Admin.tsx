@@ -527,6 +527,48 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }
   };
 
+  const handleReloadDimensions = async (item: GalleryItem) => {
+    // Global loading을 제거하여 전체 화면이 깜박거리지 않게 함
+    try {
+      const img = new Image();
+      img.src = item.imageUrl;
+      
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('Image load failed'));
+      });
+
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+
+      if (w > 0 && h > 0) {
+        const { error } = await supabase
+          .from('gallery_items')
+          .update({ width: w, height: h })
+          .eq('id', item.id);
+        
+        if (error) throw error;
+        
+        setItems(prev => prev.map(i => i.id === item.id ? { ...i, width: w, height: h } : i));
+        
+        setEditingDimensions(prev => ({
+          ...prev,
+          [item.id]: {
+            width: w.toString(),
+            height: h.toString(),
+            ratio: (h / w).toFixed(2)
+          }
+        }));
+        
+        setSaveSuccess(item.id);
+        setTimeout(() => setSaveSuccess(null), 2000);
+      }
+    } catch (err) {
+      console.error('Failed to reload dimensions:', err);
+      alert('이미지 사이즈 확인 실패. URL을 확인하거나 다시 시도해주세요.');
+    }
+  };
+
   const handleMoveToLocation = async (id: string, typeAndCategory: string) => {
     if (!typeAndCategory) return;
     
@@ -651,7 +693,12 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               <h2 className="text-2xl font-light tracking-[0.2em] uppercase">Managing {activeTab}</h2>
               {(activeTab === 'intro' || activeTab === 'about') && (
                 <button 
-                  onClick={activeTab === 'intro' ? handleRestoreIntroDefaults : handleRestoreAboutDefaults}
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    if (activeTab === 'intro') handleRestoreIntroDefaults();
+                    else handleRestoreAboutDefaults();
+                  }}
                   className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
                   title="Restore original defaults"
                 >
@@ -661,7 +708,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               )}
               {(activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') && (
                 <button 
-                  onClick={handleRestoreCategoryDefaults}
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleRestoreCategoryDefaults();
+                  }}
                   className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
                   title="Restore category defaults"
                 >
@@ -1273,7 +1324,21 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         <div className="flex justify-between items-center">
                           <label className="text-[9px] uppercase tracking-widest text-neutral-500">Dimensions (W x H)</label>
                           {item.width && item.height && (
-                            <span className="text-[8px] text-blue-400 font-mono">{(item.height / item.width).toFixed(2)}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[8px] text-blue-400 font-mono">{(item.height / item.width).toFixed(2)}</span>
+                              <button 
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleReloadDimensions(item);
+                                }}
+                                className="text-neutral-600 hover:text-white p-1 transition-colors"
+                                title="Reload Original Dimensions"
+                              >
+                                <RefreshCcw size={10} />
+                              </button>
+                            </div>
                           )}
                         </div>
                         <div className="flex gap-2 items-end">
@@ -1341,6 +1406,19 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                               className="w-12 bg-transparent border-b border-blue-400/30 py-1 focus:outline-none focus:border-blue-400 text-xs font-mono text-center text-blue-400"
                             />
                           </div>
+
+                          <button 
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleReloadDimensions(item);
+                            }}
+                            className="text-neutral-600 hover:text-white p-1 mb-1 transition-colors ml-1"
+                            title="Fetch Actual Dimensions"
+                          >
+                            <RefreshCcw size={12} />
+                          </button>
                           
                           {(editingDimensions[item.id]) && (
                             <button 
