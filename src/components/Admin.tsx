@@ -61,6 +61,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     return localStorage.getItem('keenvi_admin_cat') || 'ALL';
   });
 
+  const [thumbMakeStatus, setThumbMakeStatus] = useState<Record<string, string>>({});
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [allCategoriesMap, setAllCategoriesMap] = useState<Record<string, string[]>>({});
@@ -333,6 +334,148 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       } catch (e) { console.warn('Supabase cleanup failed:', e); }
     }
   };
+const handleMakeThumbFromImage = async (item: GalleryItem) => {
+  if (!item.imageUrl) {
+    alert('원본 이미지 주소가 없습니다.');
+    return;
+  }
+
+  setThumbMakeStatus(prev => ({
+    ...prev,
+    [item.id]: 'loading'
+  }));
+
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
+
+    if (!user && !isHardcoded) {
+      throw new Error('인증 세션이 없습니다.');
+    }
+
+    // 1. 현재 item.imageUrl 로 원본 이미지 로드
+    const img = new Image();
+
+    // crossOrigin을 넣으면 외부 이미지에서 CORS 실패 가능성이 높음.
+    // 현재 replace url에서 crossOrigin 제거 후 작동했다면 여기서도 제거 유지.
+    // img.crossOrigin = "anonymous";
+
+    img.src = item.imageUrl;
+
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () =>
+        reject(new Error('이미지 로드 실패: URL이 올바르지 않거나 외부 접근이 제한되었습니다.'));
+    });
+
+    // 2. 가로 430px JPG 썸네일 생성
+    const THUMB_WIDTH = 430;
+    const scale = THUMB_WIDTH / img.naturalWidth;
+    const thumbHeight = Math.round(img.naturalHeight * scale);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = THUMB_WIDTH;
+    canvas.height = thumbHeight;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Canvas context 생성 실패');
+    }
+
+    ctx.drawImage(img, 0, 0, THUMB_WIDTH, thumbHeight);
+
+    const thumbBlob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(
+        blob => resolve(blob),
+        'image/jpeg',
+        0.88
+      );
+    });
+
+    if (!thumbBlob) {
+      throw new Error('썸네일 Blob 생성 실패');
+    }
+
+    // 3. 파일명 생성
+    const rawName =
+      item.imageUrl
+        .split('/')
+        .pop()
+        ?.split('?')[0]
+        ?.replace(/\.[^/.]+$/, '') || String(item.id);
+
+    const safeName =
+      rawName
+        .replace(/[^a-zA-Z0-9-_가-힣]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+
+    const fileName = `t-${safeName || String(item.id)}.jpg`;
+
+    // 4. thumbnail 폴더 업로드 API로 전송
+    const formData = new FormData();
+    formData.append('file', thumbBlob, fileName);
+
+    const tResp = await fetch('/api/upload/thumbnail', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!tResp.ok) {
+      const errorText = await tResp.text().catch(() => '');
+      throw new Error(`썸네일 업로드 실패: ${tResp.status} ${errorText}`);
+    }
+
+    const tData = await tResp.json();
+
+    if (!tData.url) {
+      throw new Error('썸네일 업로드 응답에 url이 없습니다.');
+    }
+
+    const newThumbnailUrl = tData.url;
+
+    // 5. DB의 thumbnail_url 업데이트
+    const { error: dbError } = await supabase
+      .from('gallery_items')
+      .update({
+        thumbnail_url: newThumbnailUrl
+      })
+      .eq('id', item.id);
+
+    if (dbError) {
+      throw dbError;
+    }
+
+    // 6. UI 업데이트
+    setItems(prev =>
+      prev.map(i =>
+        i.id === item.id
+          ? {
+              ...i,
+              thumbnailUrl: newThumbnailUrl
+            }
+          : i
+      )
+    );
+
+    // 7. 성공 표시
+    setThumbMakeStatus(prev => ({
+      ...prev,
+      [item.id]: 'success'
+    }));
+
+  } catch (err: any) {
+    console.error('Make thumbnail from image failed:', err);
+
+    setThumbMakeStatus(prev => ({
+      ...prev,
+      [item.id]: 'error'
+    }));
+
+    alert('썸네일 생성 실패: ' + (err.message || 'Unknown error'));
+  }
+};
+
 
   const handleReplaceWithUrl = async (item: GalleryItem) => {
     const newUrl = editingUrls[item.id];
@@ -352,7 +495,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       // 1. Load dimensions and attempt thumbnailing
       const img = new Image();
-      img.crossOrigin = "anonymous";
+      //img.crossOrigin = "anonymous";
       img.src = newUrl.trim();
       await new Promise((resolve, reject) => {
         img.onload = resolve;
@@ -362,21 +505,75 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       let finalThumbUrl = newUrl.trim();
-      
       try {
-        const thumbBlob = await generateThumbnail(newUrl.trim());
-        if (thumbBlob) {
-          const formData = new FormData();
-          formData.append('file', thumbBlob, 'thumb.jpg');
-          const tResp = await fetch('/api/upload/thumbnail', { method: 'POST', body: formData });
-          if (tResp.ok) {
-            const tData = await tResp.json();
-            finalThumbUrl = tData.url;
-          }
-        }
-      } catch (e) {
-        console.warn('Thumb generation skipped for URL replacement:', e);
-      }
+  // handleSaveFromUrl 방식처럼 이미 로드된 img를 그대로 사용
+  const THUMB_WIDTH = 430;
+  const scale = THUMB_WIDTH / img.naturalWidth;
+  const thumbHeight = Math.round(img.naturalHeight * scale);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = THUMB_WIDTH;
+  canvas.height = thumbHeight;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Canvas context 생성 실패');
+  }
+
+  ctx.drawImage(img, 0, 0, THUMB_WIDTH, thumbHeight);
+
+  const thumbBlob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(
+      (blob) => resolve(blob),
+      'image/jpeg',
+      0.88
+    );
+  });
+
+  if (!thumbBlob) {
+    throw new Error('썸네일 Blob 생성 실패');
+  }
+
+  const originalName =
+    newUrl
+      .trim()
+      .split('/')
+      .pop()
+      ?.split('?')[0]
+      ?.replace(/\.[^/.]+$/, '') || String(item.id);
+
+  const safeName =
+    originalName
+      .replace(/[^a-zA-Z0-9-_가-힣]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+
+  const formData = new FormData();
+  formData.append('file', thumbBlob, `t-${safeName || item.id}.jpg`);
+
+  const tResp = await fetch('/api/upload/thumbnail', {
+    method: 'POST',
+    body: formData
+  });
+
+  if (!tResp.ok) {
+    const errorText = await tResp.text().catch(() => '');
+    throw new Error(`썸네일 업로드 실패: ${tResp.status} ${errorText}`);
+  }
+
+  const tData = await tResp.json();
+
+  if (!tData.url) {
+    throw new Error('썸네일 업로드 응답에 url이 없습니다.');
+  }
+
+  finalThumbUrl = tData.url;
+} catch (e) {
+  console.warn('Thumb generation skipped for URL replacement:', e);
+
+  // handleSaveFromUrl과 동일한 안전 fallback
+  finalThumbUrl = newUrl.trim();
+}
 
       // 2. Storage cleanup (Delete old files if they are in our storage)
       const oldFiles = [item.imageUrl];
@@ -1641,7 +1838,26 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           </p>
                         </div>
                       </div>
+<div className="flex items-center gap-2 mb-2">
+  <button
+    type="button"
+    onClick={() => handleMakeThumbFromImage(item)}
+    disabled={thumbMakeStatus[item.id] === 'loading'}
+    className="px-3 py-1 text-xs border border-neutral-700 text-neutral-300 hover:text-white hover:border-neutral-500 transition-colors disabled:opacity-50"
+  >
+    {thumbMakeStatus[item.id] === 'loading'
+      ? 'making...'
+      : 'make thumb from image'}
+  </button>
 
+  {thumbMakeStatus[item.id] === 'success' && (
+    <span className="text-xs text-green-400">[성공]</span>
+  )}
+
+  {thumbMakeStatus[item.id] === 'error' && (
+    <span className="text-xs text-red-400">[실패]</span>
+  )}
+</div>
                         <div className="space-y-2 border-t border-white/5 pt-4">
                         <label className="text-[8px] uppercase tracking-widest text-neutral-600 font-bold">Replace via URL</label>
                         <div className="flex gap-2">
@@ -1653,7 +1869,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           />
                           <button 
                             disabled={!editingUrls[item.id]?.trim() || loading}
-                            onClick={() => handleReplaceWithUrl(item)}
+                            onClick={() => handleReplaceWithUrl(item) }
                             className="bg-blue-600/20 text-blue-400 border border-blue-900/50 hover:bg-blue-600/40 px-4 py-2 text-[9px] font-bold uppercase tracking-widest disabled:opacity-30 transition-all font-mono"
                           >
                             REPLACE
