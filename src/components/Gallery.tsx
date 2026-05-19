@@ -280,7 +280,7 @@ export default function Gallery({ type, subCategory }: Props) {
                     alt={item.title}
                     onLoad={() => handleImageLoad(item.id)}
                     className={cn(
-                      "w-full max-w-[450px] h-auto transition-all duration-1000 group-hover:scale-105 block mx-auto",
+                      "w-full  h-auto transition-all duration-1000 group-hover:scale-105 block mx-auto",
                       loadedImages[item.id] ? "opacity-100" : "opacity-0"
                     )}
                     referrerPolicy="no-referrer"
