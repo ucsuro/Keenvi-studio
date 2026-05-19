@@ -280,13 +280,15 @@ export default function Gallery({ type, subCategory }: Props) {
                     alt={item.title}
                     onLoad={() => handleImageLoad(item.id)}
                     className={cn(
-                      "w-full h-auto transition-all duration-1000 group-hover:scale-105 block",
-                      loadedImages[item.id] ? "opacity-100" : "opacity-0",
-                      isThumbnailUsed(item.thumbnailUrl || item.imageUrl) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
+                      "w-full max-w-[430px] h-auto transition-all duration-1000 group-hover:scale-105 block mx-auto",
+                      loadedImages[item.id] ? "opacity-100" : "opacity-0"
                     )}
                     referrerPolicy="no-referrer"
                     loading="lazy"
                   />
+                  {isThumbnailUsed(item.thumbnailUrl || item.imageUrl) && (
+                    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
+                  )}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6">
                     <p className="text-blue-400 text-[10px] tracking-[0.2em] mb-1">{item.category}</p>
                     <h3 className="text-lg font-light tracking-widest text-white leading-tight">{item.title}</h3>

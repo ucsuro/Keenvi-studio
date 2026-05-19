@@ -120,15 +120,21 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Request logging middleware
+  app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    next();
+  });
+
   app.use(express.json());
   app.use("/uploads", express.static(UPLOADS_DIR));
 
   // --- API ROUTES FIRST ---
-
+  app.get("/api/test", (req, res) => res.json({ message: "express is alive" }));
   app.get("/api/health", (req, res) => res.json({ status: "ok" }));
 
   // Upload Original
-  app.post("/api/upload", upload.single("file"), async (req: any, res) => {
+  app.post("/api/upload", upload.single("file"), async (req: any, res, next) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     try {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -144,7 +150,7 @@ async function startServer() {
         const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
         const thumbKey = `uploads/thumbnails/${thumbFilename}`;
         
-        await sharp(req.file.path).resize(430, null, { withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(thumbPath);
+        await sharp(req.file.path).jpeg({ quality: 90 }).toFile(thumbPath);
         thumbnailUrl = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
         await fs.unlink(thumbPath).catch(() => {});
       }
@@ -152,12 +158,12 @@ async function startServer() {
       res.json({ url: originalUrl, thumbnailUrl });
     } catch (err: any) {
       console.error("R2 Upload error:", err);
-      res.status(500).json({ error: err.message || "Upload failed" });
+      next(err);
     }
   });
 
   // Upload Thumbnail only
-  app.post("/api/upload/thumbnail", upload.single("file"), async (req: any, res) => {
+  app.post("/api/upload/thumbnail", upload.single("file"), async (req: any, res, next) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     try {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -165,14 +171,23 @@ async function startServer() {
       const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
       const thumbKey = `uploads/thumbnails/${thumbFilename}`;
       
-      await sharp(req.file.path).resize(430, null, { withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(thumbPath);
+      // Get dimensions before processing (or just use the uploaded file)
+      const metadata = await sharp(req.file.path).metadata();
+      const width = metadata.width || 0;
+      const height = metadata.height || 0;
+      const ratio = width && height ? parseFloat((width / height).toFixed(3)) : 1;
+
+      // Just convert to jpeg without resizing
+      await sharp(req.file.path).jpeg({ quality: 90 }).toFile(thumbPath);
+      
       const url = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
       await fs.unlink(req.file.path).catch(() => {});
       await fs.unlink(thumbPath).catch(() => {});
-      res.json({ url });
+      
+      res.json({ url, width, height, ratio });
     } catch (err: any) {
       console.error("R2 Thumb upload error:", err);
-      res.status(500).json({ error: err.message || "Thumb upload failed" });
+      next(err);
     }
   });
 
@@ -264,6 +279,15 @@ async function startServer() {
     data.about = req.body;
     await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
     res.json(data.about);
+  });
+
+  // Error Handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error("Express Error:", err);
+    res.status(err.status || 500).json({ 
+      error: err.message || "Internal Server Error",
+      stack: process.env.NODE_ENV === "development" ? err.stack : undefined
+    });
   });
 
   app.post("/api/admin/login", (req, res) => {

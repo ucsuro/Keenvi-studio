@@ -18,6 +18,7 @@ interface GalleryItem {
   createdAt: string;
   width?: number;
   height?: number;
+  ratio?: number;
 }
 
 // Helper for resizing images client-side
@@ -50,7 +51,16 @@ interface AdminProps {
 }
 
 export default function Admin({ onCategoriesChange }: AdminProps) {
-  const [activeTab, setActiveTab] = useState<'portfolio' | 'project' | 'personal' | 'about' | 'intro'>('portfolio');
+  const [activeTab, setActiveTab] = useState<'portfolio' | 'project' | 'personal' | 'about' | 'intro'>(() => {
+    return (localStorage.getItem('keenvi_admin_tab') as any) || 'portfolio';
+  });
+  const [currentPage, setCurrentPage] = useState(() => {
+    return parseInt(localStorage.getItem('keenvi_admin_page') || '1');
+  });
+  const [selectedCategory, setSelectedCategory] = useState(() => {
+    return localStorage.getItem('keenvi_admin_cat') || 'ALL';
+  });
+
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [allCategoriesMap, setAllCategoriesMap] = useState<Record<string, string[]>>({});
@@ -110,13 +120,16 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     imageUrl: '',
     thumbnailUrl: '',
     file: null as File | null,
-    manualThumbnailFile: null as File | null,
     width: 0,
-    height: 0
+    height: 0,
+    ratio: 1
   });
 
   useEffect(() => {
+    localStorage.setItem('keenvi_admin_tab', activeTab);
     fetchCategories();
+    setCurrentPage(1);
+    setSelectedCategory('ALL');
     if (activeTab === 'about') {
       fetchAboutData();
     } else if (activeTab === 'intro') {
@@ -125,6 +138,15 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       fetchItems();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem('keenvi_admin_page', currentPage.toString());
+  }, [currentPage]);
+
+  useEffect(() => {
+    localStorage.setItem('keenvi_admin_cat', selectedCategory);
+    setCurrentPage(1);
+  }, [selectedCategory]);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
@@ -255,9 +277,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       const img = new Image();
       
       img.onload = () => {
-        const targetWidth = 430;
-        const scaleFactor = targetWidth / img.width;
-        const targetHeight = img.height * scaleFactor;
+        const targetWidth = img.width;
+        const targetHeight = img.height;
 
         const canvas = document.createElement("canvas");
         canvas.width = targetWidth;
@@ -285,6 +306,32 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         img.src = URL.createObjectURL(source);
       }
     });
+  };
+
+  const cleanupOldFiles = async (urls: string[]) => {
+    const r2PublicUrl = import.meta.env.VITE_R2_PUBLIC_URL || '';
+    const r2Urls = urls.filter(url => url && r2PublicUrl && url.startsWith(r2PublicUrl));
+    const sbPart = '/storage/v1/object/public/gallery/';
+    const sbPaths = urls
+      .filter(url => url && url.includes(sbPart))
+      .map(url => url.split(sbPart)[1])
+      .filter(Boolean) as string[];
+
+    if (r2Urls.length > 0) {
+      try {
+        await fetch('/api/storage/cleanup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: r2Urls })
+        });
+      } catch (e) { console.warn('R2 cleanup failed:', e); }
+    }
+
+    if (sbPaths.length > 0) {
+      try {
+        await supabase.storage.from('gallery').remove(sbPaths);
+      } catch (e) { console.warn('Supabase cleanup failed:', e); }
+    }
   };
 
   const handleReplaceWithUrl = async (item: GalleryItem) => {
@@ -332,19 +379,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
 
       // 2. Storage cleanup (Delete old files if they are in our storage)
-      const getPath = (url: string) => {
-        const part = '/storage/v1/object/public/gallery/';
-        return (url && url.includes(part)) ? url.split(part)[1] : null;
-      };
-
-      const oldPath = getPath(item.imageUrl);
-      const oldThumbPath = item.thumbnailUrl ? getPath(item.thumbnailUrl) : null;
-      const pathsToDelete: string[] = [];
-      if (oldPath) pathsToDelete.push(oldPath);
-      if (oldThumbPath) pathsToDelete.push(oldThumbPath);
-      if (pathsToDelete.length > 0) {
-        await supabase.storage.from('gallery').remove(pathsToDelete);
-      }
+      const oldFiles = [item.imageUrl];
+      if (item.thumbnailUrl) oldFiles.push(item.thumbnailUrl);
+      await cleanupOldFiles(oldFiles);
 
       // 3. DB Update
       const dbUpdates: any = { 
@@ -434,43 +471,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
       }
 
-      const pathsToDelete: string[] = [];
-      
-      const getPath = (url: string) => {
-        if (!url) return null;
-        const part = '/storage/v1/object/public/gallery/';
-        if (url.includes(part)) {
-          return url.split(part)[1];
-        }
-        return null;
-      };
-
-      const imgPath = getPath(itemToDelete.imageUrl);
-      const thumbPath = itemToDelete.thumbnailUrl ? getPath(itemToDelete.thumbnailUrl) : null;
-
-      if (imgPath) pathsToDelete.push(imgPath);
-      if (thumbPath) pathsToDelete.push(thumbPath);
-
-      // Handle R2 Cleanup
-      const r2UrlsToDelete: string[] = [];
-      if (itemToDelete.imageUrl && !imgPath) r2UrlsToDelete.push(itemToDelete.imageUrl);
-      if (itemToDelete.thumbnailUrl && !thumbPath) r2UrlsToDelete.push(itemToDelete.thumbnailUrl);
-
-      if (r2UrlsToDelete.length > 0) {
-        await fetch('/api/storage/cleanup', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: r2UrlsToDelete })
-        }).catch(err => console.warn('R2 Cleanup failed:', err));
-      }
-
-      if (pathsToDelete.length > 0) {
-        console.log('Attempting to delete storage files:', pathsToDelete);
-        const { error: storageError } = await supabase.storage.from('gallery').remove(pathsToDelete);
-        if (storageError) {
-          console.error('Storage deletion error:', storageError);
-        }
-      }
+      const filesToDelete = [itemToDelete.imageUrl];
+      if (itemToDelete.thumbnailUrl) filesToDelete.push(itemToDelete.thumbnailUrl);
+      await cleanupOldFiles(filesToDelete);
 
       const { error } = await supabase
         .from('gallery_items')
@@ -520,6 +523,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       if (!response.ok) {
         const text = await response.text();
+        console.error('Upload error response:', text);
         try {
           const errorData = JSON.parse(text);
           throw new Error(errorData.error || 'Server upload failed');
@@ -528,8 +532,14 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         }
       }
 
-      const result = await response.json();
-      return { url: result.url, thumbnailUrl: result.thumbnailUrl };
+      const text = await response.text();
+      try {
+        const result = JSON.parse(text);
+        return { url: result.url, thumbnailUrl: result.thumbnailUrl };
+      } catch (err) {
+        console.error('Failed to parse upload response:', text);
+        throw new Error('Server returned invalid response format');
+      }
     } catch (err: any) {
       console.error('Upload failed:', err);
       throw err;
@@ -548,6 +558,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       if (!response.ok) {
         const text = await response.text();
+        console.error('Thumbnail upload error response:', text);
         try {
           const errorData = JSON.parse(text);
           throw new Error(errorData.error || 'Server thumbnail upload failed');
@@ -556,8 +567,14 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         }
       }
 
-      const result = await response.json();
-      return result.url;
+      const text = await response.text();
+      try {
+        const result = JSON.parse(text);
+        return result; // Return { url, width, height, ratio }
+      } catch (err) {
+        console.error('Failed to parse thumbnail upload response:', text);
+        return null;
+      }
     } catch (err: any) {
       console.error('Thumbnail upload failed:', err);
       alert(`썸네일 업로드 실패: ${err.message}`);
@@ -578,6 +595,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       let finalImageUrl = newArt.imageUrl;
       let finalThumbnailUrl = newArt.thumbnailUrl;
+      let finalWidth = newArt.width;
+      let finalHeight = newArt.height;
+      let finalRatio = newArt.width && newArt.height ? parseFloat((newArt.width / newArt.height).toFixed(3)) : 1;
       
       if (newArt.file) {
         try {
@@ -585,6 +605,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           if (result) {
             finalImageUrl = result.url;
             finalThumbnailUrl = result.thumbnailUrl;
+            // Note: handleFileUpload doesn't return dimensions yet, 
+            // but we have them from handleFileSelection in state
           }
         } catch (uploadErr: any) {
           console.error('File Upload during Save Art failed:', uploadErr);
@@ -592,11 +614,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           setLoading(false);
           return;
         }
-      }
-
-      if (newArt.manualThumbnailFile) {
-        const manualThumbUrl = await handleManualThumbnailUpload(newArt.manualThumbnailFile);
-        if (manualThumbUrl) finalThumbnailUrl = manualThumbUrl;
       }
 
       // If it's a URL link and we don't have a distinct thumbnail yet, try generating one
@@ -635,13 +652,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         description: newArt.description,
         image_url: finalImageUrl,
         thumbnail_url: finalThumbnailUrl,
-        order: items.length > 0 ? Math.max(...items.map(i => i.order || 0)) + 1 : 0
+        order: items.length > 0 ? Math.max(...items.map(i => i.order || 0)) + 1 : 0,
+        width: finalWidth,
+        height: finalHeight,
+        ratio: finalRatio
       };
-
-      if (newArt.width > 0 && newArt.height > 0) {
-        insertData.width = newArt.width;
-        insertData.height = newArt.height;
-      }
 
       const { error: insertError } = await supabase
         .from('gallery_items')
@@ -656,7 +671,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       setNewArt({ 
         title: '', category: '', client: '', year: new Date().getFullYear().toString(), 
         description: '', imageUrl: '', thumbnailUrl: '', 
-        file: null, manualThumbnailFile: null, width: 0, height: 0
+        file: null, width: 0, height: 0, ratio: 1
       });
       setPreviewUrl(null);
       fetchItems();
@@ -756,6 +771,50 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   };
 
   const [confirmingMoveId, setConfirmingMoveId] = useState<string | null>(null);
+
+  const filteredItems = items.filter(item => {
+    if (selectedCategory === 'ALL') return true;
+    if (selectedCategory === 'UNCATEGORIZED') return !item.category;
+    return item.category === selectedCategory;
+  });
+
+  const itemsPerPage = 20;
+  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+  const paginatedItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  const Pagination = () => {
+    if (totalPages <= 1) return null;
+    return (
+      <div className="flex justify-center items-center gap-2 py-8">
+        <button 
+          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+          disabled={currentPage === 1}
+          className="px-3 py-1 text-[10px] uppercase tracking-widest bg-neutral-900 border border-white/5 disabled:opacity-30 hover:border-white/20 transition-all font-bold"
+        >
+          Prev
+        </button>
+        {[...Array(totalPages)].map((_, i) => (
+          <button 
+            key={i}
+            onClick={() => setCurrentPage(i + 1)}
+            className={cn(
+              "w-8 h-8 flex items-center justify-center text-[10px] font-mono border transition-all",
+              currentPage === i + 1 ? "bg-white text-black border-white" : "text-neutral-500 border-white/5 hover:border-white/20"
+            )}
+          >
+            {i + 1}
+          </button>
+        ))}
+        <button 
+          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+          disabled={currentPage === totalPages}
+          className="px-3 py-1 text-[10px] uppercase tracking-widest bg-neutral-900 border border-white/5 disabled:opacity-30 hover:border-white/20 transition-all font-bold"
+        >
+          Next
+        </button>
+      </div>
+    );
+  };
 
   const handleAdjustOrder = async (id: string, delta: number) => {
     const item = items.find(i => i.id === id);
@@ -940,43 +999,56 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               {tab === 'about' ? 'About Context' : tab === 'intro' ? 'Intro Context' : `${tab} Gallery`}
             </button>
           ))}
+          <button 
+            onClick={async () => {
+              try {
+                const res = await fetch('/api/test');
+                const data = await res.json();
+                alert('API Status: ' + (data.message || 'Error'));
+              } catch (e: any) {
+                alert('API failed: ' + e.message);
+              }
+            }}
+            className="text-left px-6 py-4 text-[8px] uppercase tracking-[0.3em] font-bold text-neutral-600 border border-white/5 hover:border-white/20 mt-4 transition-all"
+          >
+            Test backend API
+          </button>
         </div>
 
         {/* Content */}
         <div className="flex-grow space-y-8">
           <div className="flex justify-between items-center pb-8 border-b border-white/5">
-            <div className="flex items-center gap-4">
-              <h2 className="text-2xl font-light tracking-[0.2em] uppercase">Managing {activeTab}</h2>
-              {(activeTab === 'intro' || activeTab === 'about') && (
-                <button 
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    if (activeTab === 'intro') handleRestoreIntroDefaults();
-                    else handleRestoreAboutDefaults();
-                  }}
-                  className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
-                  title="Restore original defaults"
-                >
-                  <RefreshCcw size={10} />
-                  Restore Defaults
-                </button>
-              )}
-              {(activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') && (
-                <button 
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    handleRestoreCategoryDefaults();
-                  }}
-                  className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
-                  title="Restore category defaults"
-                >
-                  <RefreshCcw size={10} />
-                  Restore Cat. Defaults
-                </button>
-              )}
-            </div>
+              <div className="flex items-center gap-4">
+                <h2 className="text-2xl font-light tracking-[0.2em] uppercase">Managing {activeTab}</h2>
+                {(activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') && (
+                  <select 
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="bg-neutral-800 border border-white/10 text-white text-[10px] uppercase tracking-widest font-bold px-3 py-1.5 focus:outline-none focus:border-white transition-all rounded-sm"
+                  >
+                    <option value="ALL">ALL CATEGORIES</option>
+                    <option value="UNCATEGORIZED">UNCATEGORIZED</option>
+                    {categories.map(cat => (
+                      <option key={cat} value={cat}>{cat}</option>
+                    ))}
+                  </select>
+                )}
+                {(activeTab === 'intro' || activeTab === 'about') && (
+                  <button 
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      if (activeTab === 'intro') handleRestoreIntroDefaults();
+                      else handleRestoreAboutDefaults();
+                    }}
+                    className="flex items-center gap-2 px-3 py-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-400 text-[8px] tracking-widest uppercase transition-colors"
+                    title="Restore original defaults"
+                  >
+                    <RefreshCcw size={10} />
+                    Restore Defaults
+                  </button>
+                )}
+              </div>
             {activeTab !== 'about' && activeTab !== 'intro' && (
               <div className="flex gap-4">
                 <button 
@@ -1343,16 +1415,18 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               </div>
             )
           ) : (
-            <div className="grid grid-cols-1 gap-12">
-              {loading ? (
-                <div className="text-center py-20 text-neutral-600 tracking-widest animate-pulse">SYNCHRONIZING...</div>
-              ) : items.length === 0 ? (
-                <div className="text-center py-20 border border-dashed border-white/5 text-neutral-600">
-                  No images found.
-                </div>
-              ) : (
-                items.map((item) => (
-                  <div key={item.id} className="grid grid-cols-1 md:grid-cols-[300px_1fr] gap-8 p-6 bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors relative">
+            <div className="space-y-4">
+              <Pagination />
+              <div className="grid grid-cols-1 gap-12">
+                {loading ? (
+                  <div className="text-center py-20 text-neutral-600 tracking-widest animate-pulse">SYNCHRONIZING...</div>
+                ) : paginatedItems.length === 0 ? (
+                  <div className="text-center py-20 border border-dashed border-white/5 text-neutral-600">
+                    No images found in this category.
+                  </div>
+                ) : (
+                  paginatedItems.map((item) => (
+                    <div key={item.id} className="grid grid-cols-1 md:grid-cols-[300px_1fr] gap-8 p-6 bg-white/[0.02] border border-white/5 hover:border-white/10 transition-colors relative">
                     {/* Order & Move Controls */}
                     <div className="absolute top-0 right-0 z-10 flex items-center border-l border-b border-white/10 bg-black/40 backdrop-blur-sm">
                       <div className="flex items-center px-2 gap-2 border-r border-white/10">
@@ -1478,11 +1552,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                             <img 
                               src={item.imageUrl} 
                               alt={item.title} 
-                              className={cn(
-                                "w-full h-full object-contain",
-                                isThumbnailUsed(item.imageUrl) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
-                              )} 
+                              className="w-full h-full object-contain"
                             />
+                            {isThumbnailUsed(item.imageUrl) && (
+                              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
+                            )}
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
                               <button 
                                 title="Update Original Image"
@@ -1493,8 +1567,13 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                                   input.onchange = async (e) => {
                                     const file = (e.target as HTMLInputElement).files?.[0];
                                     if (file) {
+                                      const oldFiles = [item.imageUrl];
+                                      if (item.thumbnailUrl) oldFiles.push(item.thumbnailUrl);
                                       const result = await handleFileUpload(file);
-                                      if (result) handleUpdateItem(item.id, { imageUrl: result.url, thumbnailUrl: result.thumbnailUrl });
+                                      if (result) {
+                                        await cleanupOldFiles(oldFiles);
+                                        handleUpdateItem(item.id, { imageUrl: result.url, thumbnailUrl: result.thumbnailUrl });
+                                      }
                                     }
                                   };
                                   input.click();
@@ -1510,14 +1589,22 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         <div className="space-y-2">
                           <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Thumbnail (Small 430px View)</label>
                           <div className="w-[50%] aspect-video bg-black/40 relative group overflow-hidden border border-white/5">
-                            <img 
-                              src={item.thumbnailUrl || item.imageUrl} 
-                              alt={item.title} 
-                              className={cn(
-                                "w-full h-full object-cover",
-                                (isThumbnailUsed(item.thumbnailUrl) || (!item.thumbnailUrl && isThumbnailUsed(item.imageUrl))) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
-                              )} 
-                            />
+                            {item.thumbnailUrl ? (
+                              <div className="relative w-full h-full">
+                                <img 
+                                  src={item.thumbnailUrl} 
+                                  alt={item.title} 
+                                  className="w-full h-full object-cover"
+                                />
+                                {isThumbnailUsed(item.thumbnailUrl) && (
+                                  <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
+                                )}
+                              </div>
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center bg-black/60">
+                                <span className="text-[7px] uppercase tracking-widest text-neutral-600">No Manual Thumbnail</span>
+                              </div>
+                            )}
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                               <button 
                                 title="Update Thumbnail Manually"
@@ -1528,19 +1615,30 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                                   input.onchange = async (e) => {
                                     const file = (e.target as HTMLInputElement).files?.[0];
                                     if (file) {
-                                      const url = await handleManualThumbnailUpload(file);
-                                      if (url) handleUpdateItem(item.id, { thumbnailUrl: url });
+                                      const oldFiles = item.thumbnailUrl ? [item.thumbnailUrl] : [];
+                                      const result = await handleManualThumbnailUpload(file);
+                                      if (result && result.url) {
+                                        if (oldFiles.length > 0) await cleanupOldFiles(oldFiles);
+                                        handleUpdateItem(item.id, { 
+                                          thumbnailUrl: result.url,
+                                          width: result.width,
+                                          height: result.height,
+                                          ratio: result.ratio
+                                        });
+                                      }
                                     }
                                   };
                                   input.click();
                                 }}
                                 className="bg-blue-600 text-white p-2 rounded-full hover:bg-blue-500"
                               >
-                                <Plus className="w-4 h-4" />
+                                {item.thumbnailUrl ? <Upload className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
                               </button>
                             </div>
                           </div>
-                          <p className="text-[8px] text-neutral-600 uppercase tracking-widest mt-1">Shown at 50% size</p>
+                          <p className="text-[8px] text-neutral-600 uppercase tracking-widest mt-1">
+                            {item.thumbnailUrl ? "Manual Thumbnail active" : "Using Source image for gallery View"}
+                          </p>
                         </div>
                       </div>
 
@@ -1762,6 +1860,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                   </div>
                 ))
               )}
+              </div>
+              <Pagination />
             </div>
           )}
         </div>
@@ -1816,11 +1916,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           <div className="relative w-full h-full">
                             <img 
                               src={previewUrl || newArt.imageUrl || ''} 
-                              className={cn(
-                                "w-full h-full object-cover",
-                                isThumbnailUsed(previewUrl || newArt.imageUrl) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
-                              )} 
+                              className="w-full h-full object-cover"
                             />
+                            {isThumbnailUsed(previewUrl || newArt.imageUrl) && (
+                              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
+                            )}
                             <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
                               <Upload className="w-8 h-8 text-white" />
                             </div>
@@ -1913,12 +2013,23 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         onClick={() => document.getElementById('manual-thumb-upload')?.click()}
                         className="aspect-video bg-black/50 border border-dashed border-white/5 flex flex-col items-center justify-center cursor-pointer hover:border-white/20 transition-all group overflow-hidden relative"
                       >
-                        {newArt.manualThumbnailFile ? (
+                        {newArt.thumbnailUrl ? (
                           <div className="relative w-full h-full">
-                            <img src={URL.createObjectURL(newArt.manualThumbnailFile)} className="w-full h-full object-cover" />
+                            <img 
+                              src={newArt.thumbnailUrl} 
+                              className="w-full h-full object-cover"
+                            />
+                            {isThumbnailUsed(newArt.thumbnailUrl) && (
+                              <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
+                            )}
                             <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                              <span className="text-[8px] uppercase tracking-widest text-white">Manual Thumb Selected</span>
+                              <Upload className="w-6 h-6 text-white" />
                             </div>
+                            {newArt.width > 0 && (
+                              <div className="absolute bottom-2 right-2 bg-black/60 px-2 py-1 text-[8px] font-mono text-neutral-400">
+                                {newArt.width} × {newArt.height}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="text-center space-y-1">
@@ -1934,7 +2045,20 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           className="hidden"
                           onChange={async (e) => {
                             const file = e.target.files?.[0];
-                            if (file) setNewArt(prev => ({...prev, manualThumbnailFile: file}));
+                            if (file) {
+                              setLoading(true);
+                              const result = await handleManualThumbnailUpload(file);
+                              if (result && result.url) {
+                                setNewArt(prev => ({
+                                  ...prev, 
+                                  thumbnailUrl: result.url,
+                                  width: result.width,
+                                  height: result.height,
+                                  ratio: result.ratio
+                                }));
+                              }
+                              setLoading(false);
+                            }
                           }}
                         />
                       </div>
