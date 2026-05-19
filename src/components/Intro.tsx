@@ -2,6 +2,7 @@ import { motion } from 'motion/react';
 import { Youtube, Twitter, Instagram, Linkedin, Globe, Facebook } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { DEFAULT_INTRO } from '../constants/defaults';
 
 interface Props {
   onNavigate: (page: any, sub?: string) => void;
@@ -41,6 +42,7 @@ export default function Intro({ onNavigate }: Props) {
         if (res) setData(res.value);
       } catch (err) {
         console.error('Failed to fetch intro data:', err);
+        setData(DEFAULT_INTRO);
       }
     }
     fetchIntroData();

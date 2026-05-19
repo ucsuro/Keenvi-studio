@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
+import { DEFAULT_ABOUT } from '../constants/defaults';
 
 interface AboutData {
   title: string;
@@ -32,6 +33,7 @@ export default function About() {
         if (res) setData(res.value);
       } catch (err) {
         console.error('Failed to fetch about data:', err);
+        setData(DEFAULT_ABOUT);
       }
     }
     fetchAboutData();

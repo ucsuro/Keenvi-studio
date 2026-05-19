@@ -3,6 +3,10 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs/promises";
 import { fileURLToPath } from "url";
+import "dotenv/config";
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import multer from "multer";
+import sharp from "sharp";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,9 +15,7 @@ const DB_PATH = path.join(__dirname, "data", "database.json");
 const MESSAGES_PATH = path.join(__dirname, "data", "messages.json");
 const UPLOADS_DIR = path.join(__dirname, "uploads");
 
-import multer from "multer";
-import sharp from "sharp";
-
+// Multer Setup
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, UPLOADS_DIR);
@@ -23,8 +25,55 @@ const storage = multer.diskStorage({
     cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
-
 const upload = multer({ storage: storage });
+
+// R2 Client Lazy Init
+let r2Client: S3Client | null = null;
+const getR2Client = () => {
+  if (!r2Client) {
+    r2Client = new S3Client({
+      region: "auto",
+      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
+      },
+    });
+  }
+  return r2Client;
+};
+
+const R2_BUCKET = process.env.R2_BUCKET_NAME || "gallery";
+const R2_PUBLIC_URL = (process.env.VITE_R2_PUBLIC_URL || "").replace(/\/$/, "");
+
+async function uploadToR2(filePath: string, key: string, contentType: string) {
+  if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
+    throw new Error("Cloudflare R2 credentials are not configured in environment variables.");
+  }
+  const fileBuffer = await fs.readFile(filePath);
+  const command = new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    Body: fileBuffer,
+    ContentType: contentType,
+  });
+  await getR2Client().send(command);
+  return `${R2_PUBLIC_URL}/${key}`;
+}
+
+async function deleteFromR2(url: string) {
+  if (!url || !R2_PUBLIC_URL || !url.startsWith(R2_PUBLIC_URL)) return;
+  const key = url.replace(`${R2_PUBLIC_URL}/`, "");
+  try {
+    const command = new DeleteObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+    });
+    await getR2Client().send(command);
+  } catch (err) {
+    console.warn("Failed to delete from R2:", key, err);
+  }
+}
 
 async function initDB() {
   try {
@@ -39,7 +88,6 @@ async function initDB() {
     await fs.mkdir(UPLOADS_DIR);
   }
 
-  // Ensure thumbnails directory exists
   const THUMBNAILS_DIR = path.join(UPLOADS_DIR, "thumbnails");
   try {
     await fs.access(THUMBNAILS_DIR);
@@ -51,488 +99,198 @@ async function initDB() {
     const dbExists = await fs.access(DB_PATH).then(() => true).catch(() => false);
     if (!dbExists) {
       const initialDB = { 
-        portfolio: [], 
-        project: [], 
-        personal: [], 
-        about: {
-          title: "KeenVi Studio",
-          description: "Studio description...",
-          bio: "Studio biography...",
-          career: [],
-          skills: [],
-          tools: []
-        },
-        intro: {
-          logoText: "KEENVI STUDIO",
-          headline: "Visual Storyteller & Concept Artist based in Seoul.",
-          links: {
-            artstation: "#",
-            instagram: "#",
-            linkedin: "#",
-            facebook: "#",
-            naver: "#",
-            twitter: "#"
-          },
-          gateways: {
-            portfolio: "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&w=1200&q=80",
-            project: "https://images.unsplash.com/photo-1614850523296-d8c1af93d400?auto=format&fit=crop&w=1200&q=80",
-            personal: "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=1200&q=80"
-          }
-        },
-        categories: {
-          portfolio: ["Illustration", "Key Art / Story", "Concept Art"],
-          project: ["Freelance", "RFonline:RE", "Blade & Soul", "Genesis4"],
-          personal: ["Original Art", "Study", "Character", "Worldbuilding", "AI / 3D Experiment"]
-        }
+        portfolio: [], project: [], personal: [], 
+        about: { title: "KeenVi", description: "Studio...", bio: "Bio...", career: [], skills: [], tools: [] },
+        intro: { logoText: "KEENVI", headline: "Artist", links: {}, gateways: {} },
+        categories: { portfolio: [], project: [], personal: [] }
       };
       await fs.writeFile(DB_PATH, JSON.stringify(initialDB, null, 2), "utf-8");
-    } else {
-      // Data Migration: Ensure categories is a keyed object
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      if (!data.categories || Array.isArray(data.categories)) {
-        const oldCats = Array.isArray(data.categories) ? data.categories : [];
-        data.categories = {
-          portfolio: oldCats.length > 0 ? oldCats : ["Illustration", "Key Art / Story", "Concept Art"],
-          project: ["Freelance", "RFonline:RE", "Blade & Soul", "Genesis4"],
-          personal: ["Original Art", "Study", "Character", "Worldbuilding", "AI / 3D Experiment"]
-        };
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
-      }
-      
-      if (!data.intro) {
-        data.intro = {
-          logoText: "KEENVI STUDIO",
-          headline: "Visual Storyteller & Concept Artist based in Seoul.",
-          links: {
-            artstation: "#",
-            instagram: "#",
-            linkedin: "#",
-            facebook: "#",
-            naver: "#",
-            twitter: "#"
-          },
-          gateways: {
-            portfolio: "https://images.unsplash.com/photo-1620641788421-7a1c342ea42e?auto=format&fit=crop&w=1200&q=80",
-            project: "https://images.unsplash.com/photo-1614850523296-d8c1af93d400?auto=format&fit=crop&w=1200&q=80",
-            personal: "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?auto=format&fit=crop&w=1200&q=80"
-          }
-        };
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
-      } else {
-        // Upgrade existing intro data
-        let changed = false;
-        if (!data.intro.logoText) {
-          data.intro.logoText = "KEENVI STUDIO";
-          changed = true;
-        }
-        if (!data.intro.links.facebook) {
-          data.intro.links.facebook = "#";
-          changed = true;
-        }
-        if (changed) {
-          await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
-        }
-      }
-
-      // Initialize 'order' for existing gallery items if missing
-      const galleryTypes = ["portfolio", "project", "personal"];
-      let migrationNeeded = false;
-      galleryTypes.forEach(type => {
-        if (data[type] && Array.isArray(data[type])) {
-          data[type].forEach((item: any, index: number) => {
-            if (typeof item.order !== 'number') {
-              // Inverse index so that items at the top of the array (newer) get higher numbers
-              // This preserves current visual order if they are already sub-sorted by date
-              item.order = data[type].length - 1 - index;
-              migrationNeeded = true;
-            }
-          });
-        }
-      });
-      if (migrationNeeded) {
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2), "utf-8");
-      }
+    }
+    const messExists = await fs.access(MESSAGES_PATH).then(() => true).catch(() => false);
+    if (!messExists) {
+      await fs.writeFile(MESSAGES_PATH, "[]", "utf-8");
     }
   } catch (err) {
-    console.error("DB Initialization error:", err);
-  }
-
-  try {
-    await fs.access(MESSAGES_PATH);
-  } catch {
-    await fs.writeFile(MESSAGES_PATH, JSON.stringify([], null, 2));
+    console.error("DB Init failed:", err);
   }
 }
 
 async function startServer() {
   await initDB();
-
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
   app.use("/uploads", express.static(UPLOADS_DIR));
 
-  // Upload Route
+  // --- API ROUTES FIRST ---
+
+  app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+
+  // Upload Original
   app.post("/api/upload", upload.single("file"), async (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-    
-    const originalUrl = `/uploads/${req.file.filename}`;
-    let thumbnailUrl = originalUrl;
-
-    // Check if it's an image to generate a thumbnail
-    const ext = path.extname(req.file.filename).toLowerCase();
-    const isImage = [".jpg", ".jpeg", ".png", ".webp", ".gif"].includes(ext);
-
-    if (isImage) {
-      const thumbFilename = `thumb-${req.file.filename}`;
-      const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
+    try {
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const ext = path.extname(req.file.filename).toLowerCase();
+      const mainKey = `uploads/${uniqueSuffix}${ext}`;
       
-      try {
-        await sharp(req.file.path)
-          .resize(430, null, { // Width of 430, height auto
-            withoutEnlargement: true,
-            kernel: sharp.kernel.lanczos3 // High quality scaling
-          })
-          .toFile(thumbPath);
-        thumbnailUrl = `/uploads/thumbnails/${thumbFilename}`;
-      } catch (error) {
-        console.error("Thumbnail generation failed:", error);
-      }
-    }
+      const originalUrl = await uploadToR2(req.file.path, mainKey, req.file.mimetype);
+      let thumbnailUrl = originalUrl;
 
-    res.json({ url: originalUrl, thumbnailUrl: thumbnailUrl });
+      const isImage = [".jpg", ".jpeg", ".png", ".webp"].includes(ext);
+      if (isImage) {
+        const thumbFilename = `thumb-${uniqueSuffix}.jpg`;
+        const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
+        const thumbKey = `uploads/thumbnails/${thumbFilename}`;
+        
+        await sharp(req.file.path).resize(430, null, { withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(thumbPath);
+        thumbnailUrl = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
+        await fs.unlink(thumbPath).catch(() => {});
+      }
+      await fs.unlink(req.file.path).catch(() => {});
+      res.json({ url: originalUrl, thumbnailUrl });
+    } catch (err: any) {
+      console.error("R2 Upload error:", err);
+      res.status(500).json({ error: err.message || "Upload failed" });
+    }
   });
 
-  // Manual Thumbnail Upload Route
+  // Upload Thumbnail only
   app.post("/api/upload/thumbnail", upload.single("file"), async (req: any, res) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-    const thumbFilename = `manual-thumb-${req.file.filename}`;
-    const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
-
     try {
-      // Even manual uploads are forced to 430px width if larger, as requested
-      await sharp(req.file.path)
-        .resize(430, null, {
-          withoutEnlargement: true,
-          kernel: sharp.kernel.lanczos3
-        })
-        .toFile(thumbPath);
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      const thumbFilename = `t-${uniqueSuffix}.jpg`;
+      const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
+      const thumbKey = `uploads/thumbnails/${thumbFilename}`;
       
-      // Remove the non-resized version from main uploads since we only need the thumb
-      await fs.unlink(req.file.path);
-      
-      res.json({ url: `/uploads/thumbnails/${thumbFilename}` });
-    } catch (error) {
-      res.status(500).json({ error: "Manual thumbnail processing failed" });
+      await sharp(req.file.path).resize(430, null, { withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(thumbPath);
+      const url = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
+      await fs.unlink(req.file.path).catch(() => {});
+      await fs.unlink(thumbPath).catch(() => {});
+      res.json({ url });
+    } catch (err: any) {
+      console.error("R2 Thumb upload error:", err);
+      res.status(500).json({ error: err.message || "Thumb upload failed" });
     }
   });
 
-  // GET Categories
-  app.get("/api/categories", async (req, res) => {
+  app.post("/api/storage/cleanup", async (req, res) => {
+    const { urls } = req.body;
+    if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: "Invalid urls" });
     try {
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      res.json(data.categories || { portfolio: [], project: [], personal: [] });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch categories" });
-    }
-  });
-
-  // POST Category
-  app.post("/api/categories/:type", async (req, res) => {
-    try {
-      const { type } = req.params;
-      const { name } = req.body;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      if (!data.categories) data.categories = { portfolio: [], project: [], personal: [] };
-      if (!data.categories[type]) data.categories[type] = [];
-      
-      if (!data.categories[type].includes(name)) {
-        data.categories[type].push(name);
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      }
-      res.json(data.categories[type]);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to add category" });
-    }
-  });
-
-  // DELETE Category
-  app.delete("/api/categories/:type/:name", async (req, res) => {
-    try {
-      const { type, name } = req.params;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      if (data.categories && data.categories[type]) {
-        data.categories[type] = data.categories[type].filter((c: string) => c !== name);
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      }
-      res.json(data.categories ? data.categories[type] : []);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to delete category" });
-    }
-  });
-
-  // REORDER Categories
-  app.put("/api/categories/:type/reorder", async (req, res) => {
-    try {
-      const { type } = req.params;
-      const { categories } = req.body;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      
-      if (!data.categories) data.categories = { portfolio: [], project: [], personal: [] };
-      data.categories[type] = categories;
-      
-      await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json(data.categories[type]);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to reorder categories" });
-    }
-  });
-
-  // GET Gallery
-  app.get("/api/gallery/:type", async (req, res) => {
-    try {
-      const type = req.params.type;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      const items = data[type] || [];
-      const cats = (data.categories && data.categories[type]) || [];
-
-      // Sort logic: order DESC, then createdAt DESC
-      const sorted = [...items].sort((a, b) => {
-        const orderA = a.order ?? 0;
-        const orderB = b.order ?? 0;
-        if (orderB !== orderA) return orderB - orderA;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      });
-
-      res.json(sorted);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to read database" });
-    }
-  });
-
-  // Create Gallery Item with incremental order
-  app.post("/api/gallery/:type", async (req, res) => {
-    try {
-      const type = req.params.type;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      const items = data[type] || [];
-      
-      const maxOrder = items.length > 0 ? Math.max(...items.map((i: any) => i.order || 0)) : -1;
-      
-      const newItem = { 
-        ...req.body, 
-        id: Date.now().toString(), 
-        createdAt: new Date().toISOString(),
-        order: maxOrder + 1 
-      };
-      
-      if (!data[type]) data[type] = [];
-      data[type].unshift(newItem);
-      await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json(newItem);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to create item" });
-    }
-  });
-
-  // GET About
-  app.get("/api/about", async (req, res) => {
-    try {
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      res.json(data.about || {});
-    } catch (error) {
-      res.status(500).json({ error: "Failed to read database" });
-    }
-  });
-
-  // POST Contact
-  app.post("/api/contact", async (req, res) => {
-    try {
-      const { name, email, company, message } = req.body;
-      const messages = JSON.parse(await fs.readFile(MESSAGES_PATH, "utf-8"));
-      const newMessage = { id: Date.now().toString(), name, email, company, message, date: new Date().toISOString() };
-      messages.push(newMessage);
-      await fs.writeFile(MESSAGES_PATH, JSON.stringify(messages, null, 2));
-      
-      console.log(`Email notification sent to ucsuro@naver.com for message from ${name}`);
-      
+      for (const url of urls) await deleteFromR2(url);
       res.json({ status: "success" });
-    } catch (error) {
-      res.status(500).json({ error: "Failed to save message" });
-    }
+    } catch (err) { res.status(500).json({ error: "Cleanup failed" }); }
   });
 
-  // Admin Login
-  app.post("/api/admin/login", (req, res) => {
-    try {
-      const { id, password } = req.body;
-      
-      const receivedId = id?.trim();
-      const receivedPass = password?.trim();
-
-      // Normal credentials
-      const normalId = "keenvi";
-      const normalPass = "667429";
-
-      // Hardcoded "Master" credentials
-      const masterId = "admin";
-      const masterPass = "admin12345";
-
-      // Check ID first
-      const isNormalId = receivedId?.toLowerCase() === normalId.toLowerCase();
-      const isMasterId = receivedId?.toLowerCase() === masterId.toLowerCase();
-
-      if (!isNormalId && !isMasterId) {
-        return res.status(401).json({ error: "id 가 없거나 틀립니다." });
-      }
-
-      // If ID is correct, check Password
-      const isPassCorrect = isMasterId 
-        ? receivedPass === masterPass 
-        : receivedPass === normalPass;
-
-      if (!isPassCorrect) {
-        return res.status(401).json({ error: "pw 가 틀렸습니다." });
-      }
-
-      // Success
-      res.json({ 
-        token: isMasterId ? "admin-master-session" : "keenvi-auth-session",
-        type: isMasterId ? "master" : "normal"
-      });
-    } catch (error) {
-      res.status(500).json({ error: "db 접속이 문제가 있습니다." });
-    }
+  // DB Getters
+  app.get("/api/categories", async (req, res) => {
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    res.json(data.categories || { portfolio: [], project: [], personal: [] });
   });
 
-  // UPDATE Gallery Item
-  app.put("/api/gallery/:type/:id", async (req, res) => {
-    try {
-      const { type, id } = req.params;
-      const updatedItem = req.body;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      
-      const index = data[type].findIndex((item: any) => item.id === id);
-      if (index !== -1) {
-        data[type][index] = { ...data[type][index], ...updatedItem };
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-        res.json(data[type][index]);
-      } else {
-        res.status(404).json({ error: "Item not found" });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Failed to update item" });
-    }
+  app.get("/api/gallery/:type", async (req, res) => {
+    const { type } = req.params;
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    const items = data[type] || [];
+    res.json([...items].sort((a, b) => (b.order ?? 0) - (a.order ?? 0) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
   });
 
-  // UPDATE About Data
-  app.put("/api/about", async (req, res) => {
-    try {
-      const updatedAbout = req.body;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      data.about = updatedAbout;
-      await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json(data.about);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to update about data" });
-    }
+  app.get("/api/about", async (req, res) => {
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    res.json(data.about || {});
   });
 
-  // GET Intro Data
   app.get("/api/intro", async (req, res) => {
-    try {
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      res.json(data.intro || {});
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch intro data" });
-    }
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    res.json(data.intro || {});
   });
 
-  // UPDATE Intro Data
-  app.put("/api/intro", async (req, res) => {
-    try {
-      const updatedIntro = req.body;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      data.intro = updatedIntro;
+  // DB Setters
+  app.post("/api/gallery/:type", async (req, res) => {
+    const { type } = req.params;
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    if (!data[type]) data[type] = [];
+    const maxOrder = data[type].length > 0 ? Math.max(...data[type].map((i: any) => i.order || 0)) : -1;
+    const newItem = { ...req.body, id: Date.now().toString(), createdAt: new Date().toISOString(), order: maxOrder + 1 };
+    data[type].unshift(newItem);
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
+    res.json(newItem);
+  });
+
+  app.put("/api/gallery/:type/:id", async (req, res) => {
+    const { type, id } = req.params;
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    const idx = data[type].findIndex((i: any) => i.id === id);
+    if (idx !== -1) {
+      data[type][idx] = { ...data[type][idx], ...req.body };
       await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json(data.intro);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to update intro data" });
-    }
+      res.json(data[type][idx]);
+    } else res.status(404).json({ error: "Not found" });
   });
 
-  // DELETE Gallery Item with physical file removal
   app.delete("/api/gallery/:type/:id", async (req, res) => {
-    try {
-      const { type, id } = req.params;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      
-      const itemToDelete = data[type].find((item: any) => item.id === id);
-      
-      if (itemToDelete) {
-        // Physical file deletion
-        const deleteFile = async (url: string) => {
-          if (!url) return;
-          // Handles both /uploads/filename.ext and /uploads/thumbnails/filename.ext
-          const filePath = path.join(__dirname, "public", url);
-          try {
-            await fs.access(filePath);
-            await fs.unlink(filePath);
-          } catch (err) {
-            // Ignore if file doesn't exist or can't be deleted
-          }
-        };
-
-        if (itemToDelete.imageUrl) await deleteFile(itemToDelete.imageUrl);
-        if (itemToDelete.thumbnailUrl) await deleteFile(itemToDelete.thumbnailUrl);
-
-        data[type] = data[type].filter((item: any) => item.id !== id);
-        await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-        res.json({ status: "success" });
-      } else {
-        res.status(404).json({ error: "Item not found" });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Failed to delete item" });
-    }
-  });
-
-  // REORDER Gallery Items
-  app.put("/api/gallery/:type/reorder", async (req, res) => {
-    try {
-      const { type } = req.params;
-      const { items } = req.body;
-      const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-      
-      data[type] = items;
-      
+    const { type, id } = req.params;
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    const item = data[type].find((i: any) => i.id === id);
+    if (item) {
+      if (item.imageUrl) await deleteFromR2(item.imageUrl);
+      if (item.thumbnailUrl) await deleteFromR2(item.thumbnailUrl);
+      data[type] = data[type].filter((i: any) => i.id !== id);
       await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json(data[type]);
-    } catch (error) {
-      res.status(500).json({ error: "Failed to reorder gallery items" });
-    }
+      res.json({ status: "success" });
+    } else res.status(404).json({ error: "Not found" });
   });
 
-  // Vite middleware for development
+  app.put("/api/gallery/:type/reorder", async (req, res) => {
+    const { type } = req.params;
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    data[type] = req.body.items;
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
+    res.json(data[type]);
+  });
+
+  app.put("/api/intro", async (req, res) => {
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    data.intro = req.body;
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
+    res.json(data.intro);
+  });
+
+  app.put("/api/about", async (req, res) => {
+    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
+    data.about = req.body;
+    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
+    res.json(data.about);
+  });
+
+  app.post("/api/admin/login", (req, res) => {
+    const { id, password } = req.body;
+    if ((id === "keenvi" && password === "667429") || (id === "admin" && password === "admin12345")) {
+      res.json({ token: "auth-token", type: id === "admin" ? "master" : "normal" });
+    } else res.status(401).json({ error: "Invalid credentials" });
+  });
+
+  app.post("/api/contact", async (req, res) => {
+    const messages = JSON.parse(await fs.readFile(MESSAGES_PATH, "utf-8"));
+    messages.push({ id: Date.now().toString(), ...req.body, date: new Date().toISOString() });
+    await fs.writeFile(MESSAGES_PATH, JSON.stringify(messages, null, 2));
+    res.json({ status: "success" });
+  });
+
+  // --- VITE MIDDLEWARE ---
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  app.listen(PORT, "0.0.0.0", () => console.log(`Server listening on port ${PORT}`));
 }
 
-startServer();
+startServer().catch(err => console.error("Server fatal error:", err));

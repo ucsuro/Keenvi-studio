@@ -37,9 +37,21 @@ export default function Gallery({ type, subCategory }: Props) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const handleImageLoad = (id: string) => {
     setLoadedImages(prev => ({ ...prev, [id]: true }));
+  };
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsAdmin(!!session || localStorage.getItem('keenvi_auth') === 'hardcoded');
+    });
+  }, []);
+
+  const isThumbnailUsed = (url: string | undefined): boolean => {
+    if (!url || !isAdmin) return false;
+    return url.includes('/thumbnails/') || url.includes('-t.') || url.includes('thumb-') || url.includes('t-');
   };
 
   // Initial calculation for visible count based on columns
@@ -269,7 +281,8 @@ export default function Gallery({ type, subCategory }: Props) {
                     onLoad={() => handleImageLoad(item.id)}
                     className={cn(
                       "w-full h-auto transition-all duration-1000 group-hover:scale-105 block",
-                      loadedImages[item.id] ? "opacity-100" : "opacity-0"
+                      loadedImages[item.id] ? "opacity-100" : "opacity-0",
+                      isThumbnailUsed(item.thumbnailUrl || item.imageUrl) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
                     )}
                     referrerPolicy="no-referrer"
                     loading="lazy"

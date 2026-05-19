@@ -8,6 +8,7 @@ import Admin from './components/Admin';
 import { cn } from './lib/utils';
 import { supabase } from './lib/supabase';
 import { trackPageView } from './lib/analytics';
+import { DEFAULT_CATEGORIES } from './constants/defaults';
 
 type Page = 'Intro' | 'Portfolio' | 'Project' | 'Personal Work' | 'About' | 'Contact' | 'Admin';
 
@@ -30,7 +31,6 @@ export default function App() {
         .single();
       
       if (error) {
-        // If categories don't exist yet, it's fine, we use the default state
         if (error.code !== 'PGRST116') throw error;
       }
       
@@ -39,6 +39,7 @@ export default function App() {
       }
     } catch (error) {
       console.error('Failed to fetch categories:', error);
+      setCategories(DEFAULT_CATEGORIES);
     }
   };
 
@@ -46,14 +47,19 @@ export default function App() {
   useEffect(() => {
     fetchCategories();
     
-    // Auth state listener
-    if (!supabase) return;
+    // Check hardcoded login
+    if (localStorage.getItem('keenvi_auth') === 'hardcoded') {
+      setIsLoggedIn(true);
+    }
     
+    // Auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (session) {
         setIsLoggedIn(true);
       } else {
-        setIsLoggedIn(false);
+        if (localStorage.getItem('keenvi_auth') !== 'hardcoded') {
+          setIsLoggedIn(false);
+        }
       }
     });
 
@@ -64,13 +70,23 @@ export default function App() {
     e.preventDefault();
     setLoginError(null);
     try {
+      // Hardcoded admin check
+      if (adminId.trim() === 'keenvi' && adminPw.trim() === 'admin123456') {
+        setIsLoggedIn(true);
+        localStorage.setItem('keenvi_auth', 'hardcoded');
+        setShowLoginModal(false);
+        setAdminId('');
+        setAdminPw('');
+        setLoginError(null);
+        return;
+      }
+
       const { error } = await supabase.auth.signInWithPassword({
         email: adminId.trim(),
         password: adminPw.trim(),
       });
-      
       if (error) throw error;
-
+      
       setShowLoginModal(false);
       setAdminId('');
       setAdminPw('');
@@ -173,8 +189,8 @@ export default function App() {
 
             <form onSubmit={handleLogin} className="space-y-6">
               <input
-                type="email"
-                placeholder="EMAIL"
+                type="text"
+                placeholder="USERNAME / EMAIL"
                 value={adminId}
                 onChange={e => setAdminId(e.target.value)}
                 className="w-full bg-black border-b border-white/10 py-3 focus:outline-none focus:border-white text-sm"

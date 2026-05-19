@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Trash2, X, Upload, Check, ChevronUp, ChevronDown, RefreshCcw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { DEFAULT_INTRO, DEFAULT_ABOUT, DEFAULT_CATEGORIES } from '../constants/defaults';
+import { cn } from '../lib/utils';
 
 interface GalleryItem {
   id: string;
@@ -90,10 +91,14 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   
   // Modal states
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [urlInput, setUrlInput] = useState('');
+  const [urlStatus, setUrlStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [showCatModal, setShowCatModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<GalleryItem | null>(null);
   const [newCatName, setNewCatName] = useState('');
+  const [editingUrls, setEditingUrls] = useState<Record<string, string>>({});
   
   // Form states for adding new art
   const [newArt, setNewArt] = useState({
@@ -129,6 +134,12 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     };
   }, [previewUrl]);
 
+  const isThumbnailUsed = (url: string | undefined): boolean => {
+    if (!url) return false;
+    // Check for 'thumbnails' folder or patterns like '-t', 'thumb-', 't-'
+    return url.includes('/thumbnails/') || url.includes('-t.') || url.includes('thumb-') || url.includes('t-');
+  };
+
   const fetchAboutData = async () => {
     const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'about').single();
     if (data) setAboutData(data.value);
@@ -140,12 +151,21 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   };
 
   const fetchCategories = async () => {
-    const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'categories').single();
-    if (data) {
-      const allCats = data.value || {};
+    try {
+      const { data, error } = await supabase.from('site_settings').select('value').eq('key', 'categories').single();
+      let allCats = (data && data.value) ? data.value : DEFAULT_CATEGORIES;
+      
       setAllCategoriesMap(allCats);
       if (activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') {
         setCategories(allCats[activeTab] || []);
+      } else {
+        setCategories([]);
+      }
+    } catch (err) {
+      console.warn('Error fetching categories, using defaults:', err);
+      setAllCategoriesMap(DEFAULT_CATEGORIES);
+      if (activeTab === 'portfolio' || activeTab === 'project' || activeTab === 'personal') {
+        setCategories(DEFAULT_CATEGORIES[activeTab as keyof typeof DEFAULT_CATEGORIES] || []);
       } else {
         setCategories([]);
       }
@@ -156,6 +176,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     setLoading(true);
     try {
       const dbType = activeTab === 'personal' ? 'personal' : activeTab;
+
       const { data, error } = await supabase
         .from('gallery_items')
         .select('*')
@@ -187,6 +208,182 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }
   };
 
+  const handleSaveFromUrl = async () => {
+    if (!urlInput.trim()) return;
+    setUrlStatus('loading');
+
+    try {
+      // 1. Fetch Dimensions
+      const img = new Image();
+      img.src = urlInput.trim();
+      
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('Image URL load failed. Please check the URL.'));
+      });
+
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+
+      setNewArt(prev => ({
+        ...prev,
+        imageUrl: urlInput.trim(),
+        thumbnailUrl: urlInput.trim(),
+        width: w,
+        height: h,
+        file: null
+      }));
+      
+      setPreviewUrl(urlInput.trim());
+      setUrlStatus('success');
+
+      // Stay on the input layer for a moment to show success, then hide ONLY the URL input part
+      setTimeout(() => {
+        setShowUrlInput(false);
+        setUrlStatus('idle');
+      }, 1000);
+
+    } catch (err: any) {
+      console.error('URL Save Error:', err);
+      setUrlStatus('error');
+      alert(err.message || 'Failed to check URL');
+    }
+  };
+
+  const generateThumbnail = async (source: File | string): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      
+      img.onload = () => {
+        const targetWidth = 430;
+        const scaleFactor = targetWidth / img.width;
+        const targetHeight = img.height * scaleFactor;
+
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+        canvas.toBlob((blob) => resolve(blob), "image/jpeg", 0.85);
+      };
+
+      img.onerror = () => {
+        console.warn('Thumbnail source load error');
+        resolve(null);
+      };
+      
+      if (typeof source === 'string') {
+        img.crossOrigin = "anonymous";
+        img.src = source;
+      } else {
+        img.src = URL.createObjectURL(source);
+      }
+    });
+  };
+
+  const handleReplaceWithUrl = async (item: GalleryItem) => {
+    const newUrl = editingUrls[item.id];
+    if (!newUrl || !newUrl.trim()) {
+      alert('교체할 이미지 URL을 입력해주세요.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
+      
+      if (!user && !isHardcoded) {
+        throw new Error('인증 세션이 없습니다.');
+      }
+
+      // 1. Load dimensions and attempt thumbnailing
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = newUrl.trim();
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('이미지 로드 실패 (URL이 올바르지 않거나 CORS 제한)'));
+      });
+
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      let finalThumbUrl = newUrl.trim();
+      
+      try {
+        const thumbBlob = await generateThumbnail(newUrl.trim());
+        if (thumbBlob) {
+          const formData = new FormData();
+          formData.append('file', thumbBlob, 'thumb.jpg');
+          const tResp = await fetch('/api/upload/thumbnail', { method: 'POST', body: formData });
+          if (tResp.ok) {
+            const tData = await tResp.json();
+            finalThumbUrl = tData.url;
+          }
+        }
+      } catch (e) {
+        console.warn('Thumb generation skipped for URL replacement:', e);
+      }
+
+      // 2. Storage cleanup (Delete old files if they are in our storage)
+      const getPath = (url: string) => {
+        const part = '/storage/v1/object/public/gallery/';
+        return (url && url.includes(part)) ? url.split(part)[1] : null;
+      };
+
+      const oldPath = getPath(item.imageUrl);
+      const oldThumbPath = item.thumbnailUrl ? getPath(item.thumbnailUrl) : null;
+      const pathsToDelete: string[] = [];
+      if (oldPath) pathsToDelete.push(oldPath);
+      if (oldThumbPath) pathsToDelete.push(oldThumbPath);
+      if (pathsToDelete.length > 0) {
+        await supabase.storage.from('gallery').remove(pathsToDelete);
+      }
+
+      // 3. DB Update
+      const dbUpdates: any = { 
+        image_url: newUrl.trim(), 
+        thumbnail_url: finalThumbUrl,
+        width: w,
+        height: h
+      };
+      
+      const { error: dbError } = await supabase
+        .from('gallery_items')
+        .update(dbUpdates)
+        .eq('id', item.id);
+
+      if (dbError) throw dbError;
+
+      // 4. Update UI
+      setItems(prev => prev.map(i => i.id === item.id ? { 
+        ...i, 
+        imageUrl: newUrl.trim(), 
+        thumbnailUrl: finalThumbUrl,
+        width: w,
+        height: h
+      } : i));
+      
+      setEditingUrls(prev => {
+        const n = { ...prev };
+        delete n[item.id];
+        return n;
+      });
+      alert('이미지가 교체되었습니다.');
+    } catch (err: any) {
+      console.error('URL Replacement failed:', err);
+      alert('교체 실패: ' + (err.message || 'Unknown error'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleUpdateItem = async (id: string, updates: Partial<GalleryItem>) => {
     const dbUpdates: any = {};
     if (updates.title !== undefined) dbUpdates.title = updates.title;
@@ -197,6 +394,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     if (updates.year !== undefined) dbUpdates.year = updates.year;
     if (updates.description !== undefined) dbUpdates.description = updates.description;
     if (updates.order !== undefined) dbUpdates.order = updates.order;
+    if (updates.width !== undefined) dbUpdates.width = updates.width;
+    if (updates.height !== undefined) dbUpdates.height = updates.height;
 
     const { error } = await supabase
       .from('gallery_items')
@@ -207,6 +406,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       setItems(items.map(item => item.id === id ? { ...item, ...updates } : item));
     } else {
       console.error('Update failed:', error);
+      let errorMsg = error.message || 'Update failed';
+      if (errorMsg.includes('row-level security policy')) {
+        errorMsg = 'Supabase RLS Policy error: "Admin" role requires permission to UPDATE. Please check your Supabase Table policies.';
+      }
+      alert(errorMsg);
     }
   };
 
@@ -223,10 +427,17 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     
     setLoading(true);
     try {
-      // 1. Delete from storage if images exist and are stored in our Supabase bucket
+      const { data: { user } } = await supabase.auth.getUser();
+      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
+      
+      if (!user && !isHardcoded) {
+        throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
+      }
+
       const pathsToDelete: string[] = [];
       
       const getPath = (url: string) => {
+        if (!url) return null;
         const part = '/storage/v1/object/public/gallery/';
         if (url.includes(part)) {
           return url.split(part)[1];
@@ -240,12 +451,27 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       if (imgPath) pathsToDelete.push(imgPath);
       if (thumbPath) pathsToDelete.push(thumbPath);
 
-      if (pathsToDelete.length > 0) {
-        const { error: storageError } = await supabase.storage.from('gallery').remove(pathsToDelete);
-        if (storageError) console.error('Storage deletion warning:', storageError);
+      // Handle R2 Cleanup
+      const r2UrlsToDelete: string[] = [];
+      if (itemToDelete.imageUrl && !imgPath) r2UrlsToDelete.push(itemToDelete.imageUrl);
+      if (itemToDelete.thumbnailUrl && !thumbPath) r2UrlsToDelete.push(itemToDelete.thumbnailUrl);
+
+      if (r2UrlsToDelete.length > 0) {
+        await fetch('/api/storage/cleanup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: r2UrlsToDelete })
+        }).catch(err => console.warn('R2 Cleanup failed:', err));
       }
 
-      // 2. Delete from database
+      if (pathsToDelete.length > 0) {
+        console.log('Attempting to delete storage files:', pathsToDelete);
+        const { error: storageError } = await supabase.storage.from('gallery').remove(pathsToDelete);
+        if (storageError) {
+          console.error('Storage deletion error:', storageError);
+        }
+      }
+
       const { error } = await supabase
         .from('gallery_items')
         .delete()
@@ -260,56 +486,81 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
     } catch (err: any) {
       console.error('Delete failed:', err);
-      alert('Deletion failed: ' + (err.message || 'Unknown error occurred'));
+      let errorMsg = err.message || 'Unknown error occurred';
+      if (errorMsg.includes('row-level security policy')) {
+        errorMsg = 'Supabase RLS Policy error: "Admin" role requires permission to DELETE. Please check your Supabase Table & Storage policies.';
+      }
+      alert('Deletion failed: ' + errorMsg);
     } finally {
       setLoading(false);
     }
   };
 
+  const handleFileSelection = (file: File) => {
+    setNewArt(prev => ({ ...prev, file, imageUrl: '', thumbnailUrl: '' }));
+    if (previewUrl && !previewUrl.startsWith('http')) URL.revokeObjectURL(previewUrl);
+    const newUrl = URL.createObjectURL(file);
+    setPreviewUrl(newUrl);
+    const img = new Image();
+    img.onload = () => {
+      setNewArt(prev => ({ ...prev, width: img.naturalWidth, height: img.naturalHeight }));
+    };
+    img.src = newUrl;
+  };
+
   const handleFileUpload = async (file: File) => {
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random()}-${Date.now()}.${fileExt}`;
-      const filePath = `uploads/${fileName}`;
+      const formData = new FormData();
+      formData.append('file', file);
 
-      const { data, error } = await supabase.storage
-        .from('gallery')
-        .upload(filePath, file);
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
 
-      if (error) throw error;
+      if (!response.ok) {
+        const text = await response.text();
+        try {
+          const errorData = JSON.parse(text);
+          throw new Error(errorData.error || 'Server upload failed');
+        } catch (e) {
+          throw new Error(`Server error (${response.status}): ${text.substring(0, 100)}`);
+        }
+      }
 
-      const { data: publicUrlData } = supabase.storage
-        .from('gallery')
-        .getPublicUrl(filePath);
-
-      // Simple approach: Use same URL for both if client-side resizing isn't fully implemented here
-      return { url: publicUrlData.publicUrl, thumbnailUrl: publicUrlData.publicUrl };
-    } catch (err) {
+      const result = await response.json();
+      return { url: result.url, thumbnailUrl: result.thumbnailUrl };
+    } catch (err: any) {
       console.error('Upload failed:', err);
-      alert('Upload failed');
-      return null;
+      throw err;
     }
   };
 
   const handleManualThumbnailUpload = async (file: File) => {
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `thumbs/${Math.random()}-${Date.now()}.${fileExt}`;
-      
-      const { data, error } = await supabase.storage
-        .from('gallery')
-        .upload(fileName, file);
+      const formData = new FormData();
+      formData.append('file', file);
 
-      if (error) throw error;
+      const response = await fetch('/api/upload/thumbnail', {
+        method: 'POST',
+        body: formData,
+      });
 
-      const { data: publicUrlData } = supabase.storage
-        .from('gallery')
-        .getPublicUrl(fileName);
+      if (!response.ok) {
+        const text = await response.text();
+        try {
+          const errorData = JSON.parse(text);
+          throw new Error(errorData.error || 'Server thumbnail upload failed');
+        } catch (e) {
+          throw new Error(`Server thumbnail error (${response.status}): ${text.substring(0, 100)}`);
+        }
+      }
 
-      return publicUrlData.publicUrl;
-    } catch (err) {
+      const result = await response.json();
+      return result.url;
+    } catch (err: any) {
       console.error('Thumbnail upload failed:', err);
-      alert('Thumbnail upload failed');
+      alert(`썸네일 업로드 실패: ${err.message}`);
       return null;
     }
   };
@@ -318,15 +569,26 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     e.preventDefault();
     setLoading(true);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
+      
+      if (!user && !isHardcoded) {
+        throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
+      }
+
       let finalImageUrl = newArt.imageUrl;
       let finalThumbnailUrl = newArt.thumbnailUrl;
       
       if (newArt.file) {
-        const result = await handleFileUpload(newArt.file);
-        if (result) {
-          finalImageUrl = result.url;
-          finalThumbnailUrl = result.thumbnailUrl;
-        } else {
+        try {
+          const result = await handleFileUpload(newArt.file);
+          if (result) {
+            finalImageUrl = result.url;
+            finalThumbnailUrl = result.thumbnailUrl;
+          }
+        } catch (uploadErr: any) {
+          console.error('File Upload during Save Art failed:', uploadErr);
+          alert(`이미지 업로드 실패: ${uploadErr.message || '저장소 오류'}`);
           setLoading(false);
           return;
         }
@@ -337,13 +599,33 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         if (manualThumbUrl) finalThumbnailUrl = manualThumbUrl;
       }
 
+      // If it's a URL link and we don't have a distinct thumbnail yet, try generating one
+      if (newArt.imageUrl && (finalThumbnailUrl === newArt.imageUrl || !finalThumbnailUrl)) {
+        try {
+          const thumbBlob = await generateThumbnail(newArt.imageUrl);
+          if (thumbBlob) {
+            const formData = new FormData();
+            formData.append('file', thumbBlob, 'thumb.jpg');
+            const tResp = await fetch('/api/upload/thumbnail', { method: 'POST', body: formData });
+            if (tResp.ok) {
+              const tData = await tResp.json();
+              finalThumbnailUrl = tData.url;
+            }
+          }
+        } catch (thumbGenErr) {
+          console.warn('Add Art URL Thumbnail generation failed (CORS?):', thumbGenErr);
+          // Fall back to original image as thumbnail
+          finalThumbnailUrl = newArt.imageUrl;
+        }
+      }
+
       if (!finalImageUrl) {
-        alert('Please upload an image or provide a URL');
+        alert('이미지 업로드 또는 URL 링크가 필요합니다.');
         setLoading(false);
         return;
       }
 
-      const dbType = activeTab === 'personal' ? 'personal' : activeTab;
+      const dbType = activeTab;
       const insertData: any = {
         type: dbType,
         title: newArt.title,
@@ -356,54 +638,36 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         order: items.length > 0 ? Math.max(...items.map(i => i.order || 0)) + 1 : 0
       };
 
-      // Only add width/height if they are valid
       if (newArt.width > 0 && newArt.height > 0) {
         insertData.width = newArt.width;
         insertData.height = newArt.height;
       }
-      
-      let { data, error } = await supabase
+
+      const { error: insertError } = await supabase
         .from('gallery_items')
-        .insert([insertData])
-        .select()
-        .single();
-
-      // Fallback: If DB doesn't have width/height columns yet, try without them
-      if (error && (error as any).code === '42703') {
-        console.warn('DB columns width/height missing, retrying without them...');
-        const safeInsertData = { ...insertData };
-        delete safeInsertData.width;
-        delete safeInsertData.height;
-        
-        const retry = await supabase
-          .from('gallery_items')
-          .insert([safeInsertData])
-          .select()
-          .single();
-        
-        data = retry.data;
-        error = retry.error;
+        .insert([insertData]);
+      
+      if (insertError) {
+        console.error('DB Insert Error:', insertError);
+        throw new Error(`DB 저장 실패: ${insertError.message}`);
       }
 
-      if (!error) {
-        setShowAddModal(false);
-        if (previewUrl) {
-          URL.revokeObjectURL(previewUrl);
-          setPreviewUrl(null);
-        }
-        setNewArt({ 
-          title: '', category: '', client: '', year: new Date().getFullYear().toString(), 
-          description: '', imageUrl: '', thumbnailUrl: '', 
-          file: null, manualThumbnailFile: null, width: 0, height: 0
-        });
-        fetchItems();
-      } else {
-        console.error('Supabase Insert Error:', error);
-        throw error;
-      }
+      setShowAddModal(false);
+      setNewArt({ 
+        title: '', category: '', client: '', year: new Date().getFullYear().toString(), 
+        description: '', imageUrl: '', thumbnailUrl: '', 
+        file: null, manualThumbnailFile: null, width: 0, height: 0
+      });
+      setPreviewUrl(null);
+      fetchItems();
+      alert('성공적으로 저장되었습니다.');
     } catch (err: any) {
       console.error('Save Art Error:', err);
-      alert(`Failed to save art: ${err.message || 'Check database connection'}`);
+      let errorMsg = err.message || '데이터베이스 연결을 확인해주세요.';
+      if (errorMsg.includes('row-level security policy')) {
+        errorMsg = 'Supabase 권한 오류: 관리자 권한(RLS Policy)이 필요합니다.';
+      }
+      alert(`저장 실패: ${errorMsg}`);
     } finally {
       setLoading(false);
     }
@@ -439,35 +703,22 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
     } catch (err) {
       console.error('Failed to add category:', err);
-      alert('카테고리 추가 실패: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      alert('카테고리 추가 실패');
     }
   };
 
   const handleDeleteCategory = async (name: string) => {
     try {
-      const { data: res, error: fetchError } = await supabase
-        .from('site_settings')
-        .select('value')
-        .eq('key', 'categories')
-        .single();
-        
-      if (fetchError) throw fetchError;
-      
-      const allCats = res.value;
+      const { data: res } = await supabase.from('site_settings').select('value').eq('key', 'categories').single();
+      const allCats = res?.value || {};
       if (allCats[activeTab]) {
         allCats[activeTab] = allCats[activeTab].filter((c: string) => c !== name);
-        
-        const { error: upsertError } = await supabase
-          .from('site_settings')
-          .upsert({ key: 'categories', value: allCats });
-          
-        if (upsertError) throw upsertError;
-        
+        await supabase.from('site_settings').upsert({ key: 'categories', value: allCats });
         await fetchCategories();
         onCategoriesChange?.();
       }
     } catch (err) {
-      console.error('Failed to delete category:', err);
+      console.error(err);
     }
   };
 
@@ -524,6 +775,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }));
     } else {
       console.error('Failed to adjust order:', error);
+      let errorMsg = error.message || 'Failed to adjust order';
+      if (errorMsg.includes('row-level security policy')) {
+        errorMsg = 'Supabase Order Update RLS error: Please check your Supabase Table policies.';
+      }
+      alert(errorMsg);
     }
   };
 
@@ -1219,7 +1475,14 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         <div className="space-y-2">
                           <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Original Image (Source)</label>
                           <div className="aspect-video bg-black relative group overflow-hidden border border-white/10">
-                            <img src={item.imageUrl} alt={item.title} className="w-full h-full object-contain" />
+                            <img 
+                              src={item.imageUrl} 
+                              alt={item.title} 
+                              className={cn(
+                                "w-full h-full object-contain",
+                                isThumbnailUsed(item.imageUrl) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
+                              )} 
+                            />
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-4">
                               <button 
                                 title="Update Original Image"
@@ -1247,7 +1510,14 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         <div className="space-y-2">
                           <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Thumbnail (Small 430px View)</label>
                           <div className="w-[50%] aspect-video bg-black/40 relative group overflow-hidden border border-white/5">
-                            <img src={item.thumbnailUrl || item.imageUrl} alt={item.title} className="w-full h-full object-cover" />
+                            <img 
+                              src={item.thumbnailUrl || item.imageUrl} 
+                              alt={item.title} 
+                              className={cn(
+                                "w-full h-full object-cover",
+                                (isThumbnailUsed(item.thumbnailUrl) || (!item.thumbnailUrl && isThumbnailUsed(item.imageUrl))) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
+                              )} 
+                            />
                             <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                               <button 
                                 title="Update Thumbnail Manually"
@@ -1271,6 +1541,25 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                             </div>
                           </div>
                           <p className="text-[8px] text-neutral-600 uppercase tracking-widest mt-1">Shown at 50% size</p>
+                        </div>
+                      </div>
+
+                        <div className="space-y-2 border-t border-white/5 pt-4">
+                        <label className="text-[8px] uppercase tracking-widest text-neutral-600 font-bold">Replace via URL</label>
+                        <div className="flex gap-2">
+                          <input 
+                            placeholder="New Image URL..."
+                            className="flex-grow bg-black/40 border border-white/10 px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500 font-mono"
+                            value={editingUrls[item.id] || ''}
+                            onChange={(e) => setEditingUrls(prev => ({ ...prev, [item.id]: e.target.value }))}
+                          />
+                          <button 
+                            disabled={!editingUrls[item.id]?.trim() || loading}
+                            onClick={() => handleReplaceWithUrl(item)}
+                            className="bg-blue-600/20 text-blue-400 border border-blue-900/50 hover:bg-blue-600/40 px-4 py-2 text-[9px] font-bold uppercase tracking-widest disabled:opacity-30 transition-all font-mono"
+                          >
+                            REPLACE
+                          </button>
                         </div>
                       </div>
 
@@ -1497,158 +1786,237 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               
               <h2 className="text-2xl font-light tracking-[0.3em] uppercase mb-12">New Creation</h2>
               
-              <form onSubmit={handleSaveNewArt} className="grid grid-cols-1 md:grid-cols-2 gap-12">
-                <div className="space-y-8">
-                  <div 
-                    onClick={() => document.getElementById('new-file-upload')?.click()}
-                    className="aspect-video bg-black border border-dashed border-white/10 flex flex-col items-center justify-center cursor-pointer hover:border-white/30 transition-all group overflow-hidden relative"
-                  >
-                    {newArt.file ? (
-                      <div className="relative w-full h-full">
-                        <img src={previewUrl || ''} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                          <Check className="w-8 h-8 text-green-400" />
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <Upload className="w-8 h-8 text-neutral-600 group-hover:text-white transition-colors mb-4" />
-                        <div className="text-center space-y-1 px-4">
-                          <span className="text-[9px] uppercase tracking-widest text-neutral-500 block">Main Image Upload</span>
-                          <span className="text-[7px] uppercase tracking-widest text-neutral-700 block">(Original file saved, thumbnail generated automatically)</span>
-                        </div>
-                      </>
-                    )}
-                    <input 
-                      id="new-file-upload"
-                      type="file" 
-                      accept="image/*"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          // Set file immediately
-                          setNewArt(prev => ({ ...prev, file }));
-                          
-                          // Clean up old preview
-                          if (previewUrl) URL.revokeObjectURL(previewUrl);
-                          const newUrl = URL.createObjectURL(file);
-                          setPreviewUrl(newUrl);
-
-                          // Extract dimensions
-                          const img = new Image();
-                          img.onload = () => {
-                            setNewArt(prev => ({
-                              ...prev, 
-                              width: img.naturalWidth, 
-                              height: img.naturalHeight 
-                            }));
-                          };
-                          img.src = newUrl;
-                        }
-                      }}
-                    />
-                  </div>
-
-                  <div 
-                    onClick={() => document.getElementById('manual-thumb-upload')?.click()}
-                    className="aspect-video bg-black/50 border border-dashed border-white/5 flex flex-col items-center justify-center cursor-pointer hover:border-white/20 transition-all group overflow-hidden relative"
-                  >
-                    {newArt.manualThumbnailFile ? (
-                      <div className="relative w-full h-full">
-                        <img src={URL.createObjectURL(newArt.manualThumbnailFile)} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                          <span className="text-[8px] uppercase tracking-widest text-white">Manual Thumb Selected</span>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-center space-y-1">
-                        <Plus className="w-4 h-4 text-neutral-700 group-hover:text-neutral-500 mx-auto mb-2" />
-                        <span className="text-[8px] uppercase tracking-widest text-neutral-600 block">Manual Thumbnail (Optional)</span>
-                        <span className="text-[7px] uppercase tracking-widest text-neutral-700 block">Required: 430px Width</span>
-                      </div>
-                    )}
-                    <input 
-                      id="manual-thumb-upload"
-                      type="file" 
-                      accept="image/*"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) setNewArt(prev => ({...prev, manualThumbnailFile: file}));
-                      }}
-                    />
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-widest text-neutral-500">Title</label>
-                      <input 
-                        required
-                        value={newArt.title || ''}
-                        onChange={e => setNewArt({...newArt, title: e.target.value})}
-                        className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-widest text-neutral-500">Categorization</label>
-                      <select 
-                        required
-                        value={newArt.category || ''}
-                        onChange={e => setNewArt({...newArt, category: e.target.value})}
-                        className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
+              <form onSubmit={handleSaveNewArt}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
+                  {/* Left Column: Image Area */}
+                  <div className="space-y-8">
+                    <div className="space-y-4">
+                      <label className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold block mb-2">Main Content</label>
+                      <div 
+                        onClick={() => document.getElementById('new-file-upload')?.click()}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.add('border-white', 'bg-white/5');
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.remove('border-white', 'bg-white/5');
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.remove('border-white', 'bg-white/5');
+                          const file = e.dataTransfer.files?.[0];
+                          if (file && file.type.startsWith('image/')) {
+                            handleFileSelection(file);
+                          }
+                        }}
+                        className="aspect-video bg-black border border-dashed border-white/10 flex flex-col items-center justify-center cursor-pointer hover:border-white/30 transition-all group overflow-hidden relative"
                       >
-                        <option value="" disabled className="bg-neutral-900">SELECT CATEGORY</option>
-                        {categories.map(c => (
-                          <option key={c} value={c} className="bg-neutral-900">{c}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-widest text-neutral-500">Client</label>
-                      <input 
-                        value={newArt.client || ''}
-                        onChange={e => setNewArt({...newArt, client: e.target.value})}
-                        className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
-                      />
-                    </div>
-                  </div>
-                </div>
+                        {newArt.file || (newArt.imageUrl && !showUrlInput) ? (
+                          <div className="relative w-full h-full">
+                            <img 
+                              src={previewUrl || newArt.imageUrl || ''} 
+                              className={cn(
+                                "w-full h-full object-cover",
+                                isThumbnailUsed(previewUrl || newArt.imageUrl) && "ring-1 ring-white ring-inset shadow-[0_0_0_1px_rgba(255,255,255,1)]"
+                              )} 
+                            />
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
+                              <Upload className="w-8 h-8 text-white" />
+                            </div>
+                            {newArt.width > 0 && (
+                              <div className="absolute bottom-2 right-2 bg-black/60 px-2 py-1 text-[8px] font-mono text-neutral-400">
+                                {newArt.width} × {newArt.height}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            <Upload className="w-8 h-8 text-neutral-600 group-hover:text-white transition-colors mb-4" />
+                            <div className="text-center space-y-1 px-4">
+                              <span className="text-[9px] uppercase tracking-widest text-neutral-500 block">Main Image Upload</span>
+                              <span className="text-[7px] uppercase tracking-widest text-neutral-700 block">(Click or Drag & Drop)</span>
+                            </div>
+                          </>
+                        )}
+                        <input 
+                          id="new-file-upload"
+                          type="file" 
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleFileSelection(file);
+                          }}
+                        />
+                      </div>
 
-                <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-1">
-                      <label className="text-[9px] uppercase tracking-widest text-neutral-500">Year</label>
-                      <input 
-                        value={newArt.year || ''}
-                        onChange={e => setNewArt({...newArt, year: e.target.value})}
-                        className="w-full bg-transparent border-b border-white/10 py-2 focus:outline-none focus:border-white text-sm"
-                      />
+                      {!showUrlInput ? (
+                        <button 
+                          type="button"
+                          onClick={() => setShowUrlInput(true)}
+                          className="w-full py-4 border border-white/5 text-[9px] font-bold uppercase tracking-widest text-neutral-500 hover:text-white hover:border-white/20 transition-all flex items-center justify-center gap-3 bg-white/5"
+                        >
+                          <Plus size={12} /> Image URL Link
+                        </button>
+                      ) : (
+                        <div className="space-y-4 p-5 bg-black/40 border border-white/10 rounded-sm animate-in fade-in slide-in-from-top-2">
+                          <div className="flex justify-between items-center">
+                            <label className="text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-400">External Source URL</label>
+                            <button type="button" onClick={() => { setShowUrlInput(false); setUrlStatus('idle'); }} className="text-neutral-600 hover:text-white">
+                              <X size={14} />
+                            </button>
+                          </div>
+                          
+                          {urlStatus === 'success' ? (
+                            <div className="flex flex-col items-center justify-center py-4 space-y-3 bg-green-900/10 border border-green-500/20 rounded-sm">
+                              <div className="w-10 h-10 bg-green-500 rounded-full flex items-center justify-center">
+                                <Check className="text-black w-6 h-6" />
+                              </div>
+                              <span className="text-[10px] uppercase font-bold tracking-widest text-green-400">URL CHECKED & LOADED</span>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="flex gap-2">
+                                <input 
+                                  type="url"
+                                  value={urlInput}
+                                  onChange={e => setUrlInput(e.target.value)}
+                                  placeholder="https://example.com/image.jpg"
+                                  className="flex-grow bg-neutral-900 border border-white/10 px-4 py-3 text-xs focus:outline-none focus:border-blue-500 rounded-sm"
+                                  autoFocus
+                                />
+                                <button 
+                                  type="button"
+                                  onClick={handleSaveFromUrl}
+                                  disabled={urlStatus === 'loading' || !urlInput.trim()}
+                                  className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 px-6 py-3 text-[10px] uppercase tracking-widest font-bold transition-all text-white rounded-sm min-w-[80px]"
+                                >
+                                  {urlStatus === 'loading' ? 'CHECKING' : '확인'}
+                                </button>
+                              </div>
+                              {urlStatus === 'error' && (
+                                <p className="text-[8px] text-red-500 uppercase tracking-widest">Invalid URL or image load failed</p>
+                              )}
+                              <p className="text-[8px] text-neutral-600 uppercase tracking-widest leading-relaxed">
+                                * Image dimensions will be automatically extracted upon confirmation.
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-4 pt-4 border-t border-white/5">
+                      <label className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold block">Manual Thumbnail (Step View)</label>
+                      <div 
+                        onClick={() => document.getElementById('manual-thumb-upload')?.click()}
+                        className="aspect-video bg-black/50 border border-dashed border-white/5 flex flex-col items-center justify-center cursor-pointer hover:border-white/20 transition-all group overflow-hidden relative"
+                      >
+                        {newArt.manualThumbnailFile ? (
+                          <div className="relative w-full h-full">
+                            <img src={URL.createObjectURL(newArt.manualThumbnailFile)} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                              <span className="text-[8px] uppercase tracking-widest text-white">Manual Thumb Selected</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-center space-y-1">
+                            <Plus className="w-4 h-4 text-neutral-700 group-hover:text-neutral-500 mx-auto mb-2" />
+                            <span className="text-[8px] uppercase tracking-widest text-neutral-600 block">Optional Thumbnail</span>
+                            <span className="text-[7px] uppercase tracking-widest text-neutral-700 block">Source used if left blank</span>
+                          </div>
+                        )}
+                        <input 
+                          id="manual-thumb-upload"
+                          type="file" 
+                          accept="image/*"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const file = e.target.files?.[0];
+                            if (file) setNewArt(prev => ({...prev, manualThumbnailFile: file}));
+                          }}
+                        />
+                      </div>
                     </div>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[9px] uppercase tracking-widest text-neutral-500">Extended Description</label>
-                    <textarea 
-                      required
-                      value={newArt.description || ''}
-                      onChange={e => setNewArt({...newArt, description: e.target.value})}
-                      className="w-full bg-transparent border border-white/10 rounded-sm p-4 focus:outline-none focus:border-white text-sm h-32 resize-none"
-                    />
+
+                  {/* Right Column: Metadata Area */}
+                  <div className="space-y-8 flex flex-col">
+                    <div className="space-y-6 flex-grow">
+                      <div className="space-y-1">
+                        <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Project Title</label>
+                        <input 
+                          required
+                          value={newArt.title || ''}
+                          onChange={e => setNewArt({...newArt, title: e.target.value})}
+                          className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-white text-sm"
+                          placeholder="Untitled Art..."
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-6">
+                        <div className="space-y-1">
+                          <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Category</label>
+                          <select 
+                            required
+                            value={newArt.category || ''}
+                            onChange={e => setNewArt({...newArt, category: e.target.value})}
+                            className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-white text-xs"
+                          >
+                            <option value="" disabled className="bg-neutral-900">SELECT CATEGORY</option>
+                            {categories.map(c => (
+                              <option key={c} value={c} className="bg-neutral-900">{c}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Year</label>
+                          <input 
+                            value={newArt.year || ''}
+                            onChange={e => setNewArt({...newArt, year: e.target.value})}
+                            className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-white text-sm"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Client / Publisher</label>
+                        <input 
+                          value={newArt.client || ''}
+                          onChange={e => setNewArt({...newArt, client: e.target.value})}
+                          className="w-full bg-neutral-900 border border-white/5 rounded-sm px-4 py-3 focus:outline-none focus:border-white text-sm"
+                          placeholder="Personal Project"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Description</label>
+                        <textarea 
+                          required
+                          value={newArt.description || ''}
+                          onChange={e => setNewArt({...newArt, description: e.target.value})}
+                          className="w-full bg-neutral-900 border border-white/5 rounded-sm p-4 focus:outline-none focus:border-white text-sm h-40 resize-none leading-relaxed"
+                          placeholder="Brief information about this creation..."
+                        />
+                      </div>
+                    </div>
+
+                    <button 
+                      type="submit"
+                      disabled={loading || (!newArt.file && !newArt.imageUrl)}
+                      className={`w-full bg-white text-black py-5 text-[11px] font-bold uppercase tracking-[0.3em] transition-all mt-8 flex items-center justify-center gap-2 ${loading || (!newArt.file && !newArt.imageUrl) ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-200 shadow-xl shadow-black/20'}`}
+                    >
+                      {loading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                          Archiving...
+                        </>
+                      ) : (
+                        'Archive Entry'
+                      )}
+                    </button>
                   </div>
-                  <button 
-                    type="submit"
-                    disabled={loading}
-                    className={`w-full bg-white text-black py-4 text-[11px] font-bold uppercase tracking-[0.3em] transition-all mt-8 flex items-center justify-center gap-2 ${loading ? 'opacity-50 cursor-not-allowed' : 'hover:bg-neutral-200'}`}
-                  >
-                    {loading ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-                        Archiving...
-                      </>
-                    ) : (
-                      'Archive Art'
-                    )}
-                  </button>
                 </div>
               </form>
             </motion.div>
