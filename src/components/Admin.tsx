@@ -62,6 +62,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   });
 
   const [thumbMakeStatus, setThumbMakeStatus] = useState<Record<string, string>>({});
+  const [autoThumbGenStatus, setAutoThumbGenStatus] = useState<Record<string, 'loading' | 'success' | 'error' | null>>({});
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [allCategoriesMap, setAllCategoriesMap] = useState<Record<string, string[]>>({});
@@ -125,6 +126,23 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     height: 0,
     ratio: 1
   });
+
+  // Periodically send keep-alive pings to keep the cookie active
+  useEffect(() => {
+    const keepAlive = async () => {
+      try {
+        await fetch('/api/test', { credentials: 'include' });
+      } catch (err) {
+        console.warn('Keep-alive ping failed:', err);
+      }
+    };
+    // Ping immediately on mount
+    keepAlive();
+    
+    // Set interval for 2.5 minutes
+    const interval = setInterval(keepAlive, 150000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem('keenvi_admin_tab', activeTab);
@@ -322,6 +340,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       try {
         await fetch('/api/storage/cleanup', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ urls: r2Urls })
         });
@@ -346,6 +365,19 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }));
 
     try {
+      // Pre-flight session validation to ensure cookie/auth is active
+      try {
+        const testResp = await fetch('/api/test', { credentials: 'include' });
+        const testText = await testResp.text();
+        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
+          window.location.reload();
+          return;
+        }
+      } catch (e) {
+        console.warn('Session verification warning:', e);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
 
@@ -356,6 +388,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
       const response = await fetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
         },
@@ -365,16 +398,22 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         })
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`썸네일 서버 생성 실패: ${errText}`);
+      const resText = await response.text();
+      if (resText.includes('Cookie check') || resText.includes('doctype html') || resText.includes('<html')) {
+        alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+        window.location.reload();
+        return;
       }
 
-      const tData = await response.json();
+      if (!response.ok) {
+        throw new Error(`썸네일 서버 생성 실패: ${resText}`);
+      }
+
+      const tData = JSON.parse(resText);
       const newThumbnailUrl = tData.url;
 
-      // Clean up old thumbnail from storage
-      if (item.thumbnailUrl) {
+      // Clean up old thumbnail from storage only if it is distinct from the original image URL
+      if (item.thumbnailUrl && item.thumbnailUrl !== item.imageUrl) {
         await cleanupOldFiles([item.thumbnailUrl]);
       }
 
@@ -428,7 +467,21 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }
 
     setLoading(true);
+    setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'loading' }));
     try {
+      // Pre-flight session validation to ensure cookie/auth is active
+      try {
+        const testResp = await fetch('/api/test', { credentials: 'include' });
+        const testText = await testResp.text();
+        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
+          window.location.reload();
+          return;
+        }
+      } catch (e) {
+        console.warn('Session verification warning:', e);
+      }
+
       const { data: { user } } = await supabase.auth.getUser();
       const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
       
@@ -439,6 +492,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
       const response = await fetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json'
         },
@@ -448,12 +502,18 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         })
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`썸네일 서버 생성 실패: ${errText}`);
+      const resText = await response.text();
+      if (resText.includes('Cookie check') || resText.includes('doctype html') || resText.includes('<html')) {
+        alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+        window.location.reload();
+        return;
       }
 
-      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(`썸네일 서버 생성 실패: ${resText}`);
+      }
+
+      const result = JSON.parse(resText);
       const finalThumbUrl = result.url;
       const w = result.width;
       const h = result.height;
@@ -461,7 +521,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       // Storage cleanup
       const oldFiles = [item.imageUrl];
-      if (item.thumbnailUrl) oldFiles.push(item.thumbnailUrl);
+      if (item.thumbnailUrl && item.thumbnailUrl !== item.imageUrl) {
+        oldFiles.push(item.thumbnailUrl);
+      }
       await cleanupOldFiles(oldFiles);
 
       // DB update
@@ -495,8 +557,10 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         delete n[item.id];
         return n;
       });
+      setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'success' }));
       alert('이미지가 교체되었습니다.');
     } catch (err: any) {
+      setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'error' }));
       console.error('URL Replacement failed:', err);
       alert('교체 실패: ' + (err.message || 'Unknown error'));
     } finally {
@@ -523,7 +587,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       .eq('id', id);
 
     if (!error) {
-      setItems(items.map(item => item.id === id ? { ...item, ...updates } : item));
+      setItems(prev => prev.map(item => item.id === id ? { ...item, ...updates } : item));
     } else {
       console.error('Update failed:', error);
       let errorMsg = error.message || 'Update failed';
@@ -555,7 +619,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
 
       const filesToDelete = [itemToDelete.imageUrl];
-      if (itemToDelete.thumbnailUrl) filesToDelete.push(itemToDelete.thumbnailUrl);
+      if (itemToDelete.thumbnailUrl && itemToDelete.thumbnailUrl !== itemToDelete.imageUrl) {
+        filesToDelete.push(itemToDelete.thumbnailUrl);
+      }
       await cleanupOldFiles(filesToDelete);
 
       const { error } = await supabase
@@ -564,7 +630,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         .eq('id', itemToDelete.id);
 
       if (!error) {
-        setItems(items.filter(item => item.id !== itemToDelete.id));
+        setItems(prev => prev.filter(item => item.id !== itemToDelete.id));
         setShowDeleteModal(false);
         setItemToDelete(null);
       } else {
@@ -596,17 +662,36 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleFileUpload = async (file: File) => {
     try {
+      // Pre-flight session validation to ensure cookie/auth is active
+      try {
+        const testResp = await fetch('/api/test', { credentials: 'include' });
+        const testText = await testResp.text();
+        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
+          window.location.reload();
+          return null;
+        }
+      } catch (e) {
+        console.warn('Session verification warning:', e);
+      }
+
       const formData = new FormData();
       formData.append('file', file);
 
       const response = await fetch('/api/upload', {
         method: 'POST',
+        credentials: 'include',
         body: formData,
       });
 
       if (!response.ok) {
         const text = await response.text();
         console.error('Upload error response:', text);
+        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+          window.location.reload();
+          return null;
+        }
         try {
           const errorData = JSON.parse(text);
           throw new Error(errorData.error || 'Server upload failed');
@@ -621,6 +706,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         return { url: result.url, thumbnailUrl: result.thumbnailUrl };
       } catch (err) {
         console.error('Failed to parse upload response:', text);
+        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+          window.location.reload();
+          return null;
+        }
         throw new Error('Server returned invalid response format');
       }
     } catch (err: any) {
@@ -631,17 +721,36 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleManualThumbnailUpload = async (file: File) => {
     try {
+      // Pre-flight session validation to ensure cookie/auth is active
+      try {
+        const testResp = await fetch('/api/test', { credentials: 'include' });
+        const testText = await testResp.text();
+        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
+          window.location.reload();
+          return null;
+        }
+      } catch (e) {
+        console.warn('Session verification warning:', e);
+      }
+
       const formData = new FormData();
       formData.append('file', file);
 
       const response = await fetch('/api/upload/thumbnail', {
         method: 'POST',
+        credentials: 'include',
         body: formData,
       });
 
       if (!response.ok) {
         const text = await response.text();
         console.error('Thumbnail upload error response:', text);
+        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+          window.location.reload();
+          return null;
+        }
         try {
           const errorData = JSON.parse(text);
           throw new Error(errorData.error || 'Server thumbnail upload failed');
@@ -656,6 +765,11 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         return result; // Return { url, width, height, ratio }
       } catch (err) {
         console.error('Failed to parse thumbnail upload response:', text);
+        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+          window.location.reload();
+          return null;
+        }
         return null;
       }
     } catch (err: any) {
@@ -705,6 +819,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         try {
           const tResp = await fetch('/api/generate-thumbnail-from-url', {
             method: 'POST',
+            credentials: 'include',
             headers: {
               'Content-Type': 'application/json'
             },
@@ -907,10 +1022,9 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   };
 
   const handleAdjustOrder = async (id: string, delta: number) => {
-    const item = items.find(i => i.id === id);
-    if (!item) return;
-    
-    const newOrder = (item.order || 0) + delta;
+    const targetItem = items.find(i => i.id === id);
+    if (!targetItem) return;
+    const newOrder = (targetItem.order || 0) + delta;
     
     const { error } = await supabase
       .from('gallery_items')
@@ -918,7 +1032,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       .eq('id', id);
     
     if (!error) {
-      setItems(items.map(i => i.id === id ? { ...i, order: newOrder } : i).sort((a, b) => {
+      setItems(prev => prev.map(i => i.id === id ? { ...i, order: newOrder } : i).sort((a, b) => {
         if (b.order !== a.order) return b.order - a.order;
         return new Date(b.createdAt || '').getTime() - new Date(a.createdAt || '').getTime();
       }));
@@ -1092,7 +1206,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           <button 
             onClick={async () => {
               try {
-                const res = await fetch('/api/test');
+                const res = await fetch('/api/test', { credentials: 'include' });
                 const data = await res.json();
                 alert('API Status: ' + (data.message || 'Error'));
               } catch (e: any) {
@@ -1658,11 +1772,23 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                                     const file = (e.target as HTMLInputElement).files?.[0];
                                     if (file) {
                                       const oldFiles = [item.imageUrl];
-                                      if (item.thumbnailUrl) oldFiles.push(item.thumbnailUrl);
-                                      const result = await handleFileUpload(file);
-                                      if (result) {
-                                        await cleanupOldFiles(oldFiles);
-                                        handleUpdateItem(item.id, { imageUrl: result.url, thumbnailUrl: result.thumbnailUrl });
+                                      if (item.thumbnailUrl && item.thumbnailUrl !== item.imageUrl) {
+                                        oldFiles.push(item.thumbnailUrl);
+                                      }
+                                      setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'loading' }));
+                                      try {
+                                        const result = await handleFileUpload(file);
+                                        if (result) {
+                                          await cleanupOldFiles(oldFiles);
+                                          handleUpdateItem(item.id, { imageUrl: result.url, thumbnailUrl: result.thumbnailUrl });
+                                          setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'success' }));
+                                        } else {
+                                          setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: null }));
+                                        }
+                                      } catch (err: any) {
+                                        setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'error' }));
+                                        console.error('File Upload during item edit failed:', err);
+                                        alert(`이미지 업로드 실패: ${err.message || '저장소 오류'}`);
                                       }
                                     }
                                   };
@@ -1705,7 +1831,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                                   input.onchange = async (e) => {
                                     const file = (e.target as HTMLInputElement).files?.[0];
                                     if (file) {
-                                      const oldFiles = item.thumbnailUrl ? [item.thumbnailUrl] : [];
+                                      const oldFiles = (item.thumbnailUrl && item.thumbnailUrl !== item.imageUrl) ? [item.thumbnailUrl] : [];
                                       const result = await handleManualThumbnailUpload(file);
                                       if (result && result.url) {
                                         if (oldFiles.length > 0) await cleanupOldFiles(oldFiles);
@@ -1729,6 +1855,21 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           <p className="text-[8px] text-neutral-600 uppercase tracking-widest mt-1">
                             {item.thumbnailUrl ? "Manual Thumbnail active" : "Using Source image for gallery View"}
                           </p>
+                          {autoThumbGenStatus[item.id] === 'loading' && (
+                            <p className="text-[8px] text-amber-500 uppercase tracking-widest mt-1.5 flex items-center gap-1.5 animate-pulse">
+                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> 원본 이미지 업로드 진행 중...
+                            </p>
+                          )}
+                          {autoThumbGenStatus[item.id] === 'success' && (
+                            <p className="text-[8px] text-green-500 uppercase tracking-widest mt-1.5 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-green-500" /> 원본 이미지 업로드 완료
+                            </p>
+                          )}
+                          {autoThumbGenStatus[item.id] === 'error' && (
+                            <p className="text-[8px] text-red-500 uppercase tracking-widest mt-1.5 flex items-center gap-1.5">
+                              <span className="w-1.5 h-1.5 rounded-full bg-red-500" /> 원본 이미지 업로드 실패
+                            </p>
+                          )}
                         </div>
                       </div>
 <div className="flex items-center gap-2 mb-2">

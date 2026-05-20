@@ -3,5 +3,5 @@
 
 # Proxy internal API calls to the server backend (Cloud Run container hosted in AI Studio)
 # Replace the URL below with your active backend APP_URL if needed
-/api/*   https://ais-dev-w2uwut5a7bjxqpmaoqsuok-25710283100.asia-east1.run.app/api/:splat   200
-/uploads/*   https://ais-dev-w2uwut5a7bjxqpmaoqsuok-25710283100.asia-east1.run.app/uploads/:splat   200
+/api/*   https://ais-pre-w2uwut5a7bjxqpmaoqsuok-25710283100.asia-east1.run.app/api/:splat   200
+/uploads/*   https://ais-pre-w2uwut5a7bjxqpmaoqsuok-25710283100.asia-east1.run.app/uploads/:splat   200

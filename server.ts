@@ -144,6 +144,8 @@ async function startServer() {
       const originalUrl = await uploadToR2(req.file.path, mainKey, req.file.mimetype);
       let thumbnailUrl = originalUrl;
 
+      // Temporarily disabled thumbnail generation for original image upload to isolate issues
+      /*
       const isImage = [".jpg", ".jpeg", ".png", ".webp"].includes(ext);
       if (isImage) {
         const thumbFilename = `thumb-${uniqueSuffix}.jpg`;
@@ -155,6 +157,7 @@ async function startServer() {
         thumbnailUrl = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
         await fs.unlink(thumbPath).catch(() => {});
       }
+      */
       await fs.unlink(req.file.path).catch(() => {});
       res.json({ url: originalUrl, thumbnailUrl });
     } catch (err: any) {
@@ -237,7 +240,7 @@ async function startServer() {
         .replace(/-+/g, '-')
         .replace(/^-|-$/g, '');
 
-      const thumbFilename = `t-${safeName || uniqueSuffix}.jpg`;
+      const thumbFilename = `t-${safeName ? safeName + '-' : ''}${uniqueSuffix}.jpg`;
       const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
       const thumbKey = `uploads/thumbnails/${thumbFilename}`;
 

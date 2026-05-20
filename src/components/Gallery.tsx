@@ -47,6 +47,21 @@ export default function Gallery({ type, subCategory }: Props) {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsAdmin(!!session || localStorage.getItem('keenvi_auth') === 'hardcoded');
     });
+
+    // Periodically send keep-alive pings to keep the cloud cookie session active
+    const keepAlive = async () => {
+      try {
+        await fetch('/api/test', { credentials: 'include' });
+      } catch (err) {
+        console.warn('Keep-alive ping failed:', err);
+      }
+    };
+    // Ping immediately on mount
+    keepAlive();
+    
+    // Set interval for 2.5 minutes
+    const interval = setInterval(keepAlive, 150000);
+    return () => clearInterval(interval);
   }, []);
 
   const [editingItem, setEditingItem] = useState<GalleryItem | null>(null);
@@ -84,6 +99,19 @@ export default function Gallery({ type, subCategory }: Props) {
 
     setFormLoading(true);
     try {
+      // Pre-flight session validation to ensure cookie/auth is active
+      try {
+        const testResp = await fetch('/api/test', { credentials: 'include' });
+        const testText = await testResp.text();
+        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
+          window.location.reload();
+          return;
+        }
+      } catch (err) {
+        console.warn('Session verification warning:', err);
+      }
+
       const formData = new FormData();
       formData.append('file', file);
 
@@ -91,14 +119,33 @@ export default function Gallery({ type, subCategory }: Props) {
       const endpoint = isThumbnail ? '/api/upload/thumbnail' : '/api/upload';
       const response = await fetch(endpoint, {
         method: 'POST',
+        credentials: 'include',
         body: formData,
       });
 
       if (!response.ok) {
+        const text = await response.text();
+        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+          window.location.reload();
+          return;
+        }
         throw new Error(`Upload failed: ${response.statusText}`);
       }
 
-      const result = await response.json();
+      const text = await response.text();
+      let result;
+      try {
+        result = JSON.parse(text);
+      } catch (err) {
+        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
+          window.location.reload();
+          return;
+        }
+        throw new Error('Server returned invalid response format');
+      }
+
       if (isThumbnail) {
         setEditForm(prev => ({
           ...prev,
