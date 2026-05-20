@@ -436,7 +436,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         throw new Error('인증 세션이 없습니다.');
       }
 
-      // Generate 430px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
+      // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
       const response = await fetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
         headers: {
@@ -444,7 +444,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         },
         body: JSON.stringify({
           imageUrl: newUrl.trim(),
-          width: 430
+          width: 450
         })
       });
 
@@ -687,7 +687,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           const result = await handleFileUpload(newArt.file);
           if (result) {
             finalImageUrl = result.url;
-            // Preserving manual custom thumbnail if uploaded, otherwise use automatic 430px one
+            // Preserving manual custom thumbnail if uploaded, otherwise use automatic 450px one
             if (!newArt.thumbnailUrl || newArt.thumbnailUrl === newArt.imageUrl) {
               finalThumbnailUrl = result.thumbnailUrl;
             }
@@ -700,7 +700,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         }
       }
 
-      // If it's a URL link and we don't have a distinct thumbnail yet, generate high-quality 430px wide on server (CORS safe, sharp library)
+      // If it's a URL link and we don't have a distinct thumbnail yet, generate high-quality 450px wide on server (CORS safe, sharp library)
       if (newArt.imageUrl && (finalThumbnailUrl === newArt.imageUrl || !finalThumbnailUrl)) {
         try {
           const tResp = await fetch('/api/generate-thumbnail-from-url', {
@@ -710,7 +710,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
             },
             body: JSON.stringify({
               imageUrl: newArt.imageUrl.trim(),
-              width: 430
+              width: 450
             })
           });
           if (tResp.ok) {
@@ -1677,7 +1677,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         </div>
 
                         <div className="space-y-2">
-                          <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Thumbnail (Small 430px View)</label>
+                          <label className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold">Thumbnail (Small 450px View)</label>
                           <div className="w-[50%] aspect-video bg-black/40 relative group overflow-hidden border border-white/5">
                             {item.thumbnailUrl ? (
                               <div className="relative w-full h-full">
@@ -1755,7 +1755,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                         <label className="text-[8px] uppercase tracking-widest text-neutral-600 font-bold">Replace via URL</label>
                         <div className="flex gap-2">
                           <input 
-                            placeholder="New Image URL..."
+                            placeholder={item.imageUrl ? item.imageUrl.substring(0, 20) + (item.imageUrl.length > 20 ? '...' : '') : 'New Image URL...'}
                             className="flex-grow bg-black/40 border border-white/10 px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500 font-mono"
                             value={editingUrls[item.id] || ''}
                             onChange={(e) => setEditingUrls(prev => ({ ...prev, [item.id]: e.target.value }))}

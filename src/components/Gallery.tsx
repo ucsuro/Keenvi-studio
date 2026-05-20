@@ -87,7 +87,7 @@ export default function Gallery({ type, subCategory }: Props) {
       const formData = new FormData();
       formData.append('file', file);
 
-      // Manual thumbnail doesn't resize, while original upload generates 430px thumbnail automatically
+      // Manual thumbnail doesn't resize, while original upload generates 450px thumbnail automatically
       const endpoint = isThumbnail ? '/api/upload/thumbnail' : '/api/upload';
       const response = await fetch(endpoint, {
         method: 'POST',

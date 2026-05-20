@@ -150,8 +150,8 @@ async function startServer() {
         const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
         const thumbKey = `uploads/thumbnails/${thumbFilename}`;
         
-        // Resize to 430px as requested for original upload thumbnail
-        await sharp(req.file.path).resize({ width: 430 }).jpeg({ quality: 90 }).toFile(thumbPath);
+        // Resize to 450px as requested for original upload thumbnail
+        await sharp(req.file.path).resize({ width: 450 }).jpeg({ quality: 90 }).toFile(thumbPath);
         thumbnailUrl = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
         await fs.unlink(thumbPath).catch(() => {});
       }
@@ -198,7 +198,7 @@ async function startServer() {
     if (!imageUrl) {
       return res.status(400).json({ error: "imageUrl is required" });
     }
-    const targetWidth = parseInt(width) || 430;
+    const targetWidth = parseInt(width) || 450;
 
     try {
       let buffer: Buffer;
