@@ -150,7 +150,8 @@ async function startServer() {
         const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
         const thumbKey = `uploads/thumbnails/${thumbFilename}`;
         
-        await sharp(req.file.path).jpeg({ quality: 90 }).toFile(thumbPath);
+        // Resize to 430px as requested for original upload thumbnail
+        await sharp(req.file.path).resize({ width: 430 }).jpeg({ quality: 90 }).toFile(thumbPath);
         thumbnailUrl = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
         await fs.unlink(thumbPath).catch(() => {});
       }
@@ -162,7 +163,7 @@ async function startServer() {
     }
   });
 
-  // Upload Thumbnail only
+  // Upload Thumbnail only (수동으로 그대로 저장)
   app.post("/api/upload/thumbnail", upload.single("file"), async (req: any, res, next) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     try {
@@ -177,7 +178,7 @@ async function startServer() {
       const height = metadata.height || 0;
       const ratio = width && height ? parseFloat((width / height).toFixed(3)) : 1;
 
-      // Just convert to jpeg without resizing
+      // Just convert to jpeg without resizing as requested for manual upload
       await sharp(req.file.path).jpeg({ quality: 90 }).toFile(thumbPath);
       
       const url = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
@@ -188,6 +189,77 @@ async function startServer() {
     } catch (err: any) {
       console.error("R2 Thumb upload error:", err);
       next(err);
+    }
+  });
+
+  // Generate high-quality thumbnail from URL (CORS safe, sharp filter)
+  app.post("/api/generate-thumbnail-from-url", async (req, res, next) => {
+    const { imageUrl, width } = req.body;
+    if (!imageUrl) {
+      return res.status(400).json({ error: "imageUrl is required" });
+    }
+    const targetWidth = parseInt(width) || 430;
+
+    try {
+      let buffer: Buffer;
+      if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
+        }
+        const arrayBuffer = await response.arrayBuffer();
+        buffer = Buffer.from(arrayBuffer);
+      } else if (imageUrl.startsWith("/uploads/")) {
+        const localRelativePath = imageUrl.replace(/^\/uploads\//, "");
+        const fullLocalPath = path.join(UPLOADS_DIR, localRelativePath);
+        buffer = await fs.readFile(fullLocalPath);
+      } else {
+        const fullLocalPath = path.join(__dirname, imageUrl);
+        buffer = await fs.readFile(fullLocalPath);
+      }
+
+      const image = sharp(buffer);
+      const metadata = await image.metadata();
+
+      const originalWidth = metadata.width || 0;
+      const originalHeight = metadata.height || 0;
+
+      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+      
+      // Clean up final prefix and character names
+      const originalName = imageUrl
+        .split('/')
+        .pop()
+        ?.split('?')[0]
+        ?.replace(/\.[^/.]+$/, '') || 'thumb';
+      const safeName = originalName
+        .replace(/[^a-zA-Z0-9-_가-힣]/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '');
+
+      const thumbFilename = `t-${safeName || uniqueSuffix}.jpg`;
+      const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
+      const thumbKey = `uploads/thumbnails/${thumbFilename}`;
+
+      // High-quality resizing using sharp with sharpen filter
+      await image
+        .resize({ width: targetWidth, fit: 'inside', withoutEnlargement: false })
+        .sharpen({ sigma: 0.5, m1: 1.0, m2: 2.0 })
+        .jpeg({ quality: 90 })
+        .toFile(thumbPath);
+
+      const url = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
+      await fs.unlink(thumbPath).catch(() => {});
+
+      res.json({
+        url,
+        width: originalWidth,
+        height: originalHeight,
+        ratio: originalWidth && originalHeight ? parseFloat((originalWidth / originalHeight).toFixed(3)) : 1
+      });
+    } catch (err: any) {
+      console.error("Backend server generate-thumbnail error:", err);
+      res.status(500).json({ error: err.message || "Failed to generate thumbnail from URL" });
     }
   });
 

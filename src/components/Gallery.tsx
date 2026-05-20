@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ChevronLeft, ChevronRight, Maximize2, Search } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Search, Upload, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 import { trackImageClick } from '../lib/analytics';
@@ -48,6 +48,127 @@ export default function Gallery({ type, subCategory }: Props) {
       setIsAdmin(!!session || localStorage.getItem('keenvi_auth') === 'hardcoded');
     });
   }, []);
+
+  const [editingItem, setEditingItem] = useState<GalleryItem | null>(null);
+  const [editForm, setEditForm] = useState({
+    title: '',
+    category: '',
+    client: '',
+    year: '',
+    description: '',
+    imageUrl: '',
+    thumbnailUrl: '',
+    width: 0,
+    height: 0
+  });
+  const [formLoading, setFormLoading] = useState(false);
+
+  const startEditing = (item: GalleryItem) => {
+    setEditingItem(item);
+    setEditForm({
+      title: item.title || '',
+      category: item.category || '',
+      client: item.client || '',
+      year: item.year || '',
+      description: item.description || '',
+      imageUrl: item.imageUrl || '',
+      thumbnailUrl: item.thumbnailUrl || '',
+      width: item.width || 0,
+      height: item.height || 0
+    });
+  };
+
+  const handleFormFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, isThumbnail: boolean) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setFormLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      // Manual thumbnail doesn't resize, while original upload generates 430px thumbnail automatically
+      const endpoint = isThumbnail ? '/api/upload/thumbnail' : '/api/upload';
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      if (isThumbnail) {
+        setEditForm(prev => ({
+          ...prev,
+          thumbnailUrl: result.url,
+          width: result.width || prev.width,
+          height: result.height || prev.height
+        }));
+      } else {
+        setEditForm(prev => ({
+          ...prev,
+          imageUrl: result.url,
+          thumbnailUrl: result.thumbnailUrl || prev.thumbnailUrl
+        }));
+        
+        // Let's load bounds for the original image as well
+        const img = new Image();
+        img.onload = () => {
+          setEditForm(prev => ({
+            ...prev,
+            width: img.naturalWidth,
+            height: img.naturalHeight
+          }));
+        };
+        img.src = result.url;
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('파일 업로드 실패: ' + (err.message || 'Unknown error'));
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  const handleApplyModify = async () => {
+    if (!editingItem) return;
+    setFormLoading(true);
+    try {
+      const w = editForm.width || 0;
+      const h = editForm.height || 0;
+      const r = w && h ? parseFloat((w / h).toFixed(3)) : 1;
+
+      const { error } = await supabase
+        .from('gallery_items')
+        .update({
+          title: editForm.title.trim(),
+          category: editForm.category.trim(),
+          client: editForm.client.trim() || null,
+          year: editForm.year.trim() || null,
+          description: editForm.description.trim() || null,
+          image_url: editForm.imageUrl.trim(),
+          thumbnail_url: editForm.thumbnailUrl.trim() || null,
+          width: w,
+          height: h,
+          ratio: r
+        })
+        .eq('id', editingItem.id);
+
+      if (error) {
+        throw error;
+      }
+
+      alert('수정이 적용되었습니다.');
+      window.location.reload();
+    } catch (err: any) {
+      console.error(err);
+      alert('적용 실패: ' + (err.message || 'Unknown error'));
+    } finally {
+      setFormLoading(false);
+    }
+  };
 
   const isThumbnailUsed = (url: string | undefined): boolean => {
     if (!url || !isAdmin) return false;
@@ -407,6 +528,14 @@ export default function Gallery({ type, subCategory }: Props) {
                 className="absolute bottom-4 left-0 w-full px-4 z-[10002] pointer-events-none flex justify-center"
               >
                 <div className="w-fit py-1.5 px-5 bg-black/30 backdrop-blur-[2px] border border-white/5 flex flex-col md:flex-row items-center gap-x-6 gap-y-1 text-center md:text-left pointer-events-auto rounded-sm">
+                  {isAdmin && (
+                    <button
+                      onClick={() => startEditing(items[selectedIndex])}
+                      className="px-2.5 py-0.5 text-[10px] uppercase font-semibold tracking-widest bg-blue-600/80 hover:bg-blue-600 border border-blue-500/20 rounded-sm text-white transition-all active:scale-95 cursor-pointer z-[10020]"
+                    >
+                      Modify
+                    </button>
+                  )}
                   <h2 className="text-[14px] font-medium tracking-widest text-white uppercase">{items[selectedIndex].title}</h2>
                   
                   <div className="flex items-center gap-x-4">
@@ -427,6 +556,170 @@ export default function Gallery({ type, subCategory }: Props) {
               </motion.div>
             )}
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Modify Popup Modal */}
+      <AnimatePresence>
+        {editingItem && (
+          <div className="fixed inset-0 z-[10010] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-lg bg-[#0e0e0e] border border-white/10 rounded-sm overflow-hidden flex flex-col font-sans text-white text-[11px] uppercase tracking-widest"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header */}
+              <div className="flex justify-between items-center p-5 border-b border-white/5">
+                <span className="font-semibold text-xs tracking-[0.2em] text-blue-400">Modify Artwork Settings</span>
+                <button 
+                  onClick={() => setEditingItem(null)}
+                  className="text-neutral-500 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Form Body */}
+              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                {/* Title */}
+                <div className="space-y-1.5">
+                  <label className="text-neutral-500 text-[9px] font-bold block">Title</label>
+                  <input 
+                    type="text"
+                    value={editForm.title}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))}
+                    className="w-full px-3 py-2 bg-neutral-900 border border-white/10 text-white text-xs rounded-sm focus:border-blue-500/50 outline-none transition-colors"
+                    placeholder="Enter art title"
+                  />
+                </div>
+
+                {/* Category */}
+                <div className="space-y-1.5">
+                  <label className="text-neutral-500 text-[9px] font-bold block">Category</label>
+                  <input 
+                    type="text"
+                    value={editForm.category}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, category: e.target.value }))}
+                    className="w-full px-3 py-2 bg-neutral-900 border border-white/10 text-white text-xs rounded-sm focus:border-blue-500/50 outline-none transition-colors"
+                    placeholder="Enter category"
+                  />
+                </div>
+
+                {/* Client / Year Row */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-neutral-500 text-[9px] font-bold block">Client</label>
+                    <input 
+                      type="text"
+                      value={editForm.client}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, client: e.target.value }))}
+                      className="w-full px-3 py-2 bg-neutral-900 border border-white/10 text-white text-xs rounded-sm focus:border-blue-500/50 outline-none transition-colors"
+                      placeholder="e.g. Acme Studio"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-neutral-500 text-[9px] font-bold block">Year</label>
+                    <input 
+                      type="text"
+                      value={editForm.year}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, year: e.target.value }))}
+                      className="w-full px-3 py-2 bg-neutral-900 border border-white/10 text-white text-xs rounded-sm focus:border-blue-500/50 outline-none transition-colors"
+                      placeholder="e.g. 2026"
+                    />
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div className="space-y-1.5 font-sans whitespace-normal lowercase">
+                  <label className="text-neutral-500 text-[9px] font-bold uppercase tracking-widest block">Description</label>
+                  <textarea 
+                    value={editForm.description}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+                    className="w-full min-h-[80px] px-3 py-2 bg-neutral-900 border border-white/10 text-white text-xs rounded-sm focus:border-blue-500/50 outline-none transition-colors resize-none"
+                    placeholder="Enter artwork short description in lowercases"
+                  />
+                </div>
+
+                {/* Image URL Links */}
+                <div className="space-y-3 pt-2 border-t border-white/5">
+                  <div className="space-y-1">
+                    <label className="text-neutral-500 text-[9px] font-bold block">Source Image URL</label>
+                    <input 
+                      type="text"
+                      value={editForm.imageUrl}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, imageUrl: e.target.value }))}
+                      className="w-full px-3 py-1.5 bg-neutral-900 border border-white/10 text-white text-[9px] font-mono rounded-sm outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-neutral-500 text-[9px] font-bold block">Thumbnail URL</label>
+                    <input 
+                      type="text"
+                      value={editForm.thumbnailUrl}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, thumbnailUrl: e.target.value }))}
+                      className="w-full px-3 py-1.5 bg-neutral-900 border border-white/10 text-white text-[9px] font-mono rounded-sm outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* File Upload Overrides */}
+                <div className="grid grid-cols-2 gap-4 pt-3 border-t border-white/5 animate-none">
+                  <div className="space-y-1">
+                    <label className="text-neutral-500 text-[9px] font-bold block">Upload Original</label>
+                    <label className="flex items-center justify-center gap-2 px-3 py-2 bg-neutral-900 hover:bg-neutral-800 border border-white/10 rounded-sm cursor-pointer transition-colors text-center text-xs">
+                      <Upload className="w-3.5 h-3.5 text-neutral-400 animate-none" />
+                      <span className="text-[10px] text-neutral-300">Choose File</span>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={(e) => handleFormFileUpload(e, false)} 
+                        className="hidden" 
+                      />
+                    </label>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-neutral-500 text-[9px] font-bold block">Upload Thumbnail</label>
+                    <label className="flex items-center justify-center gap-2 px-3 py-2 bg-neutral-900 hover:bg-neutral-800 border border-white/10 rounded-sm cursor-pointer transition-colors text-center text-xs">
+                      <Upload className="w-3.5 h-3.5 text-neutral-400 animate-none" />
+                      <span className="text-[10px] text-neutral-300">Choose File</span>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={(e) => handleFormFileUpload(e, true)} 
+                        className="hidden" 
+                      />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex p-5 gap-3 border-t border-white/5 bg-neutral-950/40">
+                <button 
+                  type="button"
+                  onClick={() => setEditingItem(null)}
+                  className="flex-1 py-2 bg-neutral-900 hover:bg-neutral-800 border border-white/5 text-neutral-400 hover:text-white transition-colors text-center rounded-sm font-semibold active:scale-[0.98] cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="button"
+                  onClick={handleApplyModify}
+                  disabled={formLoading || !editForm.title.trim() || !editForm.category.trim() || !editForm.imageUrl.trim()}
+                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white transition-colors text-center rounded-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.98] cursor-pointer"
+                >
+                  {formLoading ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>적용 (Apply)</span>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

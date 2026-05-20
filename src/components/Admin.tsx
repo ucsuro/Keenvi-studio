@@ -334,147 +334,90 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       } catch (e) { console.warn('Supabase cleanup failed:', e); }
     }
   };
-const handleMakeThumbFromImage = async (item: GalleryItem) => {
-  if (!item.imageUrl) {
-    alert('원본 이미지 주소가 없습니다.');
-    return;
-  }
-
-  setThumbMakeStatus(prev => ({
-    ...prev,
-    [item.id]: 'loading'
-  }));
-
-  try {
-    const { data: { user } } = await supabase.auth.getUser();
-    const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
-
-    if (!user && !isHardcoded) {
-      throw new Error('인증 세션이 없습니다.');
+  const handleMakeThumbFromImage = async (item: GalleryItem) => {
+    if (!item.imageUrl) {
+      alert('원본 이미지 주소가 없습니다.');
+      return;
     }
 
-    // 1. 현재 item.imageUrl 로 원본 이미지 로드
-    const img = new Image();
+    setThumbMakeStatus(prev => ({
+      ...prev,
+      [item.id]: 'loading'
+    }));
 
-    // crossOrigin을 넣으면 외부 이미지에서 CORS 실패 가능성이 높음.
-    // 현재 replace url에서 crossOrigin 제거 후 작동했다면 여기서도 제거 유지.
-    // img.crossOrigin = "anonymous";
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
 
-    img.src = item.imageUrl;
+      if (!user && !isHardcoded) {
+        throw new Error('인증 세션이 없습니다.');
+      }
 
-    await new Promise<void>((resolve, reject) => {
-      img.onload = () => resolve();
-      img.onerror = () =>
-        reject(new Error('이미지 로드 실패: URL이 올바르지 않거나 외부 접근이 제한되었습니다.'));
-    });
+      // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
+      const response = await fetch('/api/generate-thumbnail-from-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          imageUrl: item.imageUrl,
+          width: 450
+        })
+      });
 
-    // 2. 가로 430px JPG 썸네일 생성
-    const THUMB_WIDTH = 430;
-    const scale = THUMB_WIDTH / img.naturalWidth;
-    const thumbHeight = Math.round(img.naturalHeight * scale);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`썸네일 서버 생성 실패: ${errText}`);
+      }
 
-    const canvas = document.createElement('canvas');
-    canvas.width = THUMB_WIDTH;
-    canvas.height = thumbHeight;
+      const tData = await response.json();
+      const newThumbnailUrl = tData.url;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      throw new Error('Canvas context 생성 실패');
-    }
+      // Clean up old thumbnail from storage
+      if (item.thumbnailUrl) {
+        await cleanupOldFiles([item.thumbnailUrl]);
+      }
 
-    ctx.drawImage(img, 0, 0, THUMB_WIDTH, thumbHeight);
+      // Update in database
+      const { error: dbError } = await supabase
+        .from('gallery_items')
+        .update({
+          thumbnail_url: newThumbnailUrl
+        })
+        .eq('id', item.id);
 
-    const thumbBlob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(
-        blob => resolve(blob),
-        'image/jpeg',
-        0.88
+      if (dbError) {
+        throw dbError;
+      }
+
+      // Update UI state
+      setItems(prev =>
+        prev.map(i =>
+          i.id === item.id
+            ? {
+                ...i,
+                thumbnailUrl: newThumbnailUrl
+              }
+            : i
+        )
       );
-    });
 
-    if (!thumbBlob) {
-      throw new Error('썸네일 Blob 생성 실패');
+      setThumbMakeStatus(prev => ({
+        ...prev,
+        [item.id]: 'success'
+      }));
+
+    } catch (err: any) {
+      console.error('Make thumbnail from image failed:', err);
+
+      setThumbMakeStatus(prev => ({
+        ...prev,
+        [item.id]: 'error'
+      }));
+
+      alert('썸네일 생성 실패: ' + (err.message || 'Unknown error'));
     }
-
-    // 3. 파일명 생성
-    const rawName =
-      item.imageUrl
-        .split('/')
-        .pop()
-        ?.split('?')[0]
-        ?.replace(/\.[^/.]+$/, '') || String(item.id);
-
-    const safeName =
-      rawName
-        .replace(/[^a-zA-Z0-9-_가-힣]/g, '-')
-        .replace(/-+/g, '-')
-        .replace(/^-|-$/g, '');
-
-    const fileName = `t-${safeName || String(item.id)}.jpg`;
-
-    // 4. thumbnail 폴더 업로드 API로 전송
-    const formData = new FormData();
-    formData.append('file', thumbBlob, fileName);
-
-    const tResp = await fetch('/api/upload/thumbnail', {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!tResp.ok) {
-      const errorText = await tResp.text().catch(() => '');
-      throw new Error(`썸네일 업로드 실패: ${tResp.status} ${errorText}`);
-    }
-
-    const tData = await tResp.json();
-
-    if (!tData.url) {
-      throw new Error('썸네일 업로드 응답에 url이 없습니다.');
-    }
-
-    const newThumbnailUrl = tData.url;
-
-    // 5. DB의 thumbnail_url 업데이트
-    const { error: dbError } = await supabase
-      .from('gallery_items')
-      .update({
-        thumbnail_url: newThumbnailUrl
-      })
-      .eq('id', item.id);
-
-    if (dbError) {
-      throw dbError;
-    }
-
-    // 6. UI 업데이트
-    setItems(prev =>
-      prev.map(i =>
-        i.id === item.id
-          ? {
-              ...i,
-              thumbnailUrl: newThumbnailUrl
-            }
-          : i
-      )
-    );
-
-    // 7. 성공 표시
-    setThumbMakeStatus(prev => ({
-      ...prev,
-      [item.id]: 'success'
-    }));
-
-  } catch (err: any) {
-    console.error('Make thumbnail from image failed:', err);
-
-    setThumbMakeStatus(prev => ({
-      ...prev,
-      [item.id]: 'error'
-    }));
-
-    alert('썸네일 생성 실패: ' + (err.message || 'Unknown error'));
-  }
-};
+  };
 
 
   const handleReplaceWithUrl = async (item: GalleryItem) => {
@@ -493,99 +436,41 @@ const handleMakeThumbFromImage = async (item: GalleryItem) => {
         throw new Error('인증 세션이 없습니다.');
       }
 
-      // 1. Load dimensions and attempt thumbnailing
-      const img = new Image();
-      //img.crossOrigin = "anonymous";
-      img.src = newUrl.trim();
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = () => reject(new Error('이미지 로드 실패 (URL이 올바르지 않거나 CORS 제한)'));
+      // Generate 430px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
+      const response = await fetch('/api/generate-thumbnail-from-url', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          imageUrl: newUrl.trim(),
+          width: 430
+        })
       });
 
-      const w = img.naturalWidth;
-      const h = img.naturalHeight;
-      let finalThumbUrl = newUrl.trim();
-      try {
-  // handleSaveFromUrl 방식처럼 이미 로드된 img를 그대로 사용
-  const THUMB_WIDTH = 430;
-  const scale = THUMB_WIDTH / img.naturalWidth;
-  const thumbHeight = Math.round(img.naturalHeight * scale);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`썸네일 서버 생성 실패: ${errText}`);
+      }
 
-  const canvas = document.createElement('canvas');
-  canvas.width = THUMB_WIDTH;
-  canvas.height = thumbHeight;
+      const result = await response.json();
+      const finalThumbUrl = result.url;
+      const w = result.width;
+      const h = result.height;
+      const r = result.ratio;
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('Canvas context 생성 실패');
-  }
-
-  ctx.drawImage(img, 0, 0, THUMB_WIDTH, thumbHeight);
-
-  const thumbBlob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(
-      (blob) => resolve(blob),
-      'image/jpeg',
-      0.88
-    );
-  });
-
-  if (!thumbBlob) {
-    throw new Error('썸네일 Blob 생성 실패');
-  }
-
-  const originalName =
-    newUrl
-      .trim()
-      .split('/')
-      .pop()
-      ?.split('?')[0]
-      ?.replace(/\.[^/.]+$/, '') || String(item.id);
-
-  const safeName =
-    originalName
-      .replace(/[^a-zA-Z0-9-_가-힣]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
-
-  const formData = new FormData();
-  formData.append('file', thumbBlob, `t-${safeName || item.id}.jpg`);
-
-  const tResp = await fetch('/api/upload/thumbnail', {
-    method: 'POST',
-    body: formData
-  });
-
-  if (!tResp.ok) {
-    const errorText = await tResp.text().catch(() => '');
-    throw new Error(`썸네일 업로드 실패: ${tResp.status} ${errorText}`);
-  }
-
-  const tData = await tResp.json();
-
-  if (!tData.url) {
-    throw new Error('썸네일 업로드 응답에 url이 없습니다.');
-  }
-
-  finalThumbUrl = tData.url;
-} catch (e) {
-  console.warn('Thumb generation skipped for URL replacement:', e);
-
-  // handleSaveFromUrl과 동일한 안전 fallback
-  finalThumbUrl = newUrl.trim();
-}
-
-      // 2. Storage cleanup (Delete old files if they are in our storage)
+      // Storage cleanup
       const oldFiles = [item.imageUrl];
       if (item.thumbnailUrl) oldFiles.push(item.thumbnailUrl);
       await cleanupOldFiles(oldFiles);
 
-      // 3. DB Update
+      // DB update
       const dbUpdates: any = { 
         image_url: newUrl.trim(), 
         thumbnail_url: finalThumbUrl,
         width: w,
-        height: h
+        height: h,
+        ratio: r
       };
       
       const { error: dbError } = await supabase
@@ -595,13 +480,14 @@ const handleMakeThumbFromImage = async (item: GalleryItem) => {
 
       if (dbError) throw dbError;
 
-      // 4. Update UI
+      // Update UI state
       setItems(prev => prev.map(i => i.id === item.id ? { 
         ...i, 
         imageUrl: newUrl.trim(), 
         thumbnailUrl: finalThumbUrl,
         width: w,
-        height: h
+        height: h,
+        ratio: r
       } : i));
       
       setEditingUrls(prev => {
@@ -801,9 +687,10 @@ const handleMakeThumbFromImage = async (item: GalleryItem) => {
           const result = await handleFileUpload(newArt.file);
           if (result) {
             finalImageUrl = result.url;
-            finalThumbnailUrl = result.thumbnailUrl;
-            // Note: handleFileUpload doesn't return dimensions yet, 
-            // but we have them from handleFileSelection in state
+            // Preserving manual custom thumbnail if uploaded, otherwise use automatic 430px one
+            if (!newArt.thumbnailUrl || newArt.thumbnailUrl === newArt.imageUrl) {
+              finalThumbnailUrl = result.thumbnailUrl;
+            }
           }
         } catch (uploadErr: any) {
           console.error('File Upload during Save Art failed:', uploadErr);
@@ -813,22 +700,28 @@ const handleMakeThumbFromImage = async (item: GalleryItem) => {
         }
       }
 
-      // If it's a URL link and we don't have a distinct thumbnail yet, try generating one
+      // If it's a URL link and we don't have a distinct thumbnail yet, generate high-quality 430px wide on server (CORS safe, sharp library)
       if (newArt.imageUrl && (finalThumbnailUrl === newArt.imageUrl || !finalThumbnailUrl)) {
         try {
-          const thumbBlob = await generateThumbnail(newArt.imageUrl);
-          if (thumbBlob) {
-            const formData = new FormData();
-            formData.append('file', thumbBlob, 'thumb.jpg');
-            const tResp = await fetch('/api/upload/thumbnail', { method: 'POST', body: formData });
-            if (tResp.ok) {
-              const tData = await tResp.json();
-              finalThumbnailUrl = tData.url;
-            }
+          const tResp = await fetch('/api/generate-thumbnail-from-url', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              imageUrl: newArt.imageUrl.trim(),
+              width: 430
+            })
+          });
+          if (tResp.ok) {
+            const tData = await tResp.json();
+            finalThumbnailUrl = tData.url;
+          } else {
+            console.warn('Add Art URL Thumbnail server-side generation returned non-ok status');
+            finalThumbnailUrl = newArt.imageUrl;
           }
         } catch (thumbGenErr) {
-          console.warn('Add Art URL Thumbnail generation failed (CORS?):', thumbGenErr);
-          // Fall back to original image as thumbnail
+          console.warn('Add Art URL Thumbnail generation server fetch failed:', thumbGenErr);
           finalThumbnailUrl = newArt.imageUrl;
         }
       }
