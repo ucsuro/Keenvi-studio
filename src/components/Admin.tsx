@@ -111,6 +111,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
   const [itemToDelete, setItemToDelete] = useState<GalleryItem | null>(null);
   const [newCatName, setNewCatName] = useState('');
   const [editingUrls, setEditingUrls] = useState<Record<string, string>>({});
+  const [isGeneratingNewThumb, setIsGeneratingNewThumb] = useState(false);
   
   // Form states for adding new art
   const [newArt, setNewArt] = useState({
@@ -776,6 +777,93 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       console.error('Thumbnail upload failed:', err);
       alert(`썸네일 업로드 실패: ${err.message}`);
       return null;
+    }
+  };
+
+  const handleCreateThumbnailForNewArt = async () => {
+    const hasSource = !!newArt.file || !!newArt.imageUrl;
+    if (!hasSource) {
+      alert('썸네일을 생성할 원본 이미지 파일이나 이미지 URL 링크가 등록되어 있지 않습니다.');
+      return;
+    }
+
+    setIsGeneratingNewThumb(true);
+    try {
+      try {
+        const testResp = await fetch('/api/test', { credentials: 'include' });
+        const testText = await testResp.text();
+        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
+          window.location.reload();
+          return;
+        }
+      } catch (e) {
+        console.warn('Session verification warning:', e);
+      }
+
+      const { data: { user } } = await supabase.auth.getUser();
+      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
+
+      if (!user && !isHardcoded) {
+        throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
+      }
+
+      if (newArt.file) {
+        const result = await handleFileUpload(newArt.file);
+        if (result) {
+          setNewArt(prev => ({
+            ...prev,
+            imageUrl: result.url,
+            thumbnailUrl: result.thumbnailUrl,
+            file: null
+          }));
+          setPreviewUrl(result.url);
+          alert('임시 파일이 서버에 업로드되고 썸네일이 성공적으로 생성되었습니다!');
+        } else {
+          throw new Error('파일 업로드 및 썸네일 생성에 실패했습니다.');
+        }
+      } else if (newArt.imageUrl) {
+        const response = await fetch('/api/generate-thumbnail-from-url', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            imageUrl: newArt.imageUrl.trim(),
+            width: 450
+          })
+        });
+
+        const resText = await response.text();
+        if (resText.includes('Cookie check') || resText.includes('doctype html') || resText.includes('<html')) {
+          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
+          window.location.reload();
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(`썸네일 서버 생성 실패: ${resText}`);
+        }
+
+        const tData = JSON.parse(resText);
+        const newThumbnailUrl = tData.url;
+
+        setNewArt(prev => ({
+          ...prev,
+          thumbnailUrl: newThumbnailUrl,
+          width: tData.width || prev.width,
+          height: tData.height || prev.height,
+          ratio: tData.ratio || prev.ratio
+        }));
+
+        alert('등록된 URL 이미지로부터 썸네일이 성공적으로 생성되었습니다!');
+      }
+    } catch (err: any) {
+      console.error('Create thumbnail for new art failed:', err);
+      alert('썸네일 생성 실패: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsGeneratingNewThumb(false);
     }
   };
 
@@ -2255,6 +2343,29 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
                           )}
                         </div>
                       )}
+
+                      {/* [+ Thumbnail create] 버튼 추가 */}
+                      <button 
+                        type="button"
+                        onClick={handleCreateThumbnailForNewArt}
+                        disabled={isGeneratingNewThumb || (!newArt.file && !newArt.imageUrl)}
+                        className={`w-full py-4 border transition-all flex items-center justify-center gap-3 rounded-sm ${
+                          (newArt.file || newArt.imageUrl) 
+                            ? "border-blue-500/30 text-blue-400 bg-blue-500/5 hover:bg-blue-500/10 hover:border-blue-500/50 cursor-pointer font-bold animate-pulse" 
+                            : "border-white/5 text-neutral-600 bg-white/2 cursor-not-allowed opacity-40"
+                        } text-[9px] uppercase tracking-widest`}
+                      >
+                        {isGeneratingNewThumb ? (
+                          <>
+                            <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                            <span>GENERATING THUMBNAIL...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Plus size={12} /> + Thumbnail create
+                          </>
+                        )}
+                      </button>
                     </div>
 
                     <div className="space-y-4 pt-4 border-t border-white/5">
