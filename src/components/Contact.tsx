@@ -78,53 +78,11 @@ export default function Contact() {
           {/* Main Connectivity Section */}
           <div className="space-y-8 text-center w-full">
             <div className="flex flex-col items-center justify-center gap-6 sm:gap-8">
-              {/* First Email: hello@keenvi.art */}
-              <div className="flex flex-col md:flex-row items-center justify-center gap-4 md:gap-8 group px-4">
-                <a 
-                  href="mailto:hello@keenvi.art" 
-                  className="text-[18px] sm:text-[24px] md:text-[28px] lg:text-[34px] text-neutral-300 tracking-[0.12em] font-light hover:text-blue-400 transition-all duration-500 break-all"
-                >
-                  hello@keenvi.art
-                </a>
-                <button 
-                  onClick={copyToClipboard}
-                  className="relative p-2.5 md:p-3 rounded-full border border-white/10 bg-white/[0.05] hover:bg-white/[0.1] hover:border-white/30 transition-all group shrink-0"
-                  title="Copy hello@keenvi.art to clipboard"
-                >
-                  <AnimatePresence mode="wait">
-                    {copied ? (
-                      <motion.div
-                        key="check"
-                        initial={{ opacity: 0, scale: 0.5 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.5 }}
-                      >
-                        <Check className="w-4 h-4 md:w-5 md:h-5 text-green-400" />
-                      </motion.div>
-                    ) : (
-                      <motion.div
-                        key="copy"
-                        initial={{ opacity: 0, scale: 0.5 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.5 }}
-                      >
-                        <Copy className="w-4 h-4 md:w-5 md:h-5 text-neutral-400 group-hover:text-white" />
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                  {copied && (
-                    <span className="absolute -top-10 left-1/2 -translate-x-1/2 text-[9px] uppercase tracking-widest text-green-400 font-bold whitespace-nowrap bg-neutral-900 px-2 py-1 rounded border border-white/5">
-                      Copied
-                    </span>
-                  )}
-                </button>
-              </div>
-
-              {/* Second Email: ucsuro@naver.com */}
+              {/* Email: ucsuro@naver.com */}
               <div className="flex flex-col md:flex-row items-center justify-center gap-4 md:gap-8 group px-4">
                 <a 
                   href="mailto:ucsuro@naver.com" 
-                  className="text-[16px] sm:text-[22px] md:text-[26px] lg:text-[30px] text-neutral-300 tracking-[0.12em] font-light hover:text-blue-400 transition-all duration-500 break-all"
+                  className="text-[18px] sm:text-[24px] md:text-[28px] lg:text-[34px] text-neutral-200 tracking-[0.12em] font-light hover:text-blue-400 transition-all duration-500 break-all"
                 >
                   ucsuro@naver.com
                 </a>
