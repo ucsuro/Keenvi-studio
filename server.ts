@@ -1,31 +1,76 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
-import path from "path";
-import fs from "fs/promises";
-import { fileURLToPath } from "url";
-import "dotenv/config";
+import dotenv from "dotenv";
 import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { createClient } from "@supabase/supabase-js";
 import multer from "multer";
 import sharp from "sharp";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+dotenv.config({ path: ".env.local" });
+dotenv.config();
 
-const DB_PATH = path.join(__dirname, "data", "database.json");
-const MESSAGES_PATH = path.join(__dirname, "data", "messages.json");
-const UPLOADS_DIR = path.join(__dirname, "uploads");
+const supabaseUrl = process.env.VITE_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || "";
+const supabaseVerifier = supabaseUrl && supabaseAnonKey
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  : null;
+const adminEmails = new Set(
+  (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean),
+);
 
-// Multer Setup
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+async function requireAdmin(req: any, res: any, next: any) {
+  if (!supabaseVerifier) {
+    return res.status(503).json({ error: "Supabase authentication is not configured." });
   }
+
+  if (adminEmails.size === 0) {
+    return res.status(503).json({ error: "ADMIN_EMAILS is not configured." });
+  }
+
+  const authorization = req.header("authorization") || "";
+  const [scheme, token] = authorization.split(" ");
+  if (scheme !== "Bearer" || !token) {
+    return res.status(401).json({ error: "Authentication required." });
+  }
+
+  const { data: { user }, error } = await supabaseVerifier.auth.getUser(token);
+  if (error || !user) {
+    return res.status(401).json({ error: "Invalid or expired session." });
+  }
+
+  if (adminEmails.size > 0 && (!user.email || !adminEmails.has(user.email.toLowerCase()))) {
+    return res.status(403).json({ error: "Administrator access required." });
+  }
+
+  req.user = user;
+  next();
+}
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+const MAX_REMOTE_IMAGE_BYTES = 15 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
+const EXTENSIONS_BY_MIME: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/avif": ".avif",
+};
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 10 },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
+      return cb(new Error("Only JPEG, PNG, WebP, GIF, and AVIF images are allowed."));
+    }
+    cb(null, true);
+  },
 });
-const upload = multer({ storage: storage });
 
 // R2 Client Lazy Init
 let r2Client: S3Client | null = null;
@@ -45,16 +90,77 @@ const getR2Client = () => {
 
 const R2_BUCKET = process.env.R2_BUCKET_NAME || "gallery";
 const R2_PUBLIC_URL = (process.env.VITE_R2_PUBLIC_URL || "").replace(/\/$/, "");
+const thumbnailAllowedHosts = new Set(
+  ["cdna.artstation.com", "cdnb.artstation.com", ...(process.env.THUMBNAIL_ALLOWED_HOSTS || "").split(",")]
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean),
+);
 
-async function uploadToR2(filePath: string, key: string, contentType: string) {
-  if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
+for (const trustedBaseUrl of [R2_PUBLIC_URL, supabaseUrl]) {
+  if (!trustedBaseUrl) continue;
+  try {
+    thumbnailAllowedHosts.add(new URL(trustedBaseUrl).hostname.toLowerCase());
+  } catch {
+    console.warn("A configured thumbnail base URL is invalid.");
+  }
+}
+
+async function fetchAllowedImage(imageUrl: string) {
+  let url: URL;
+  try {
+    url = new URL(imageUrl);
+  } catch {
+    throw new Error("imageUrl must be a valid HTTPS URL.");
+  }
+
+  if (url.protocol !== "https:" || !thumbnailAllowedHosts.has(url.hostname.toLowerCase())) {
+    throw new Error("This thumbnail host is not allowed.");
+  }
+
+  const response = await fetch(url, {
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+    headers: { Accept: "image/*" },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() || "";
+  if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
+    throw new Error("Remote URL did not return a supported image.");
+  }
+
+  const declaredLength = Number(response.headers.get("content-length") || 0);
+  if (declaredLength > MAX_REMOTE_IMAGE_BYTES) {
+    throw new Error("Remote image exceeds the 15 MB limit.");
+  }
+  if (!response.body) throw new Error("Remote image response was empty.");
+
+  const chunks: Buffer[] = [];
+  let received = 0;
+  const reader = response.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > MAX_REMOTE_IMAGE_BYTES) {
+      await reader.cancel();
+      throw new Error("Remote image exceeds the 15 MB limit.");
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks);
+}
+
+async function uploadToR2(body: Buffer, key: string, contentType: string) {
+  if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY || !R2_PUBLIC_URL) {
     throw new Error("Cloudflare R2 credentials are not configured in environment variables.");
   }
-  const fileBuffer = await fs.readFile(filePath);
   const command = new PutObjectCommand({
     Bucket: R2_BUCKET,
     Key: key,
-    Body: fileBuffer,
+    Body: body,
     ContentType: contentType,
   });
   await getR2Client().send(command);
@@ -62,8 +168,17 @@ async function uploadToR2(filePath: string, key: string, contentType: string) {
 }
 
 async function deleteFromR2(url: string) {
-  if (!url || !R2_PUBLIC_URL || !url.startsWith(R2_PUBLIC_URL)) return;
-  const key = url.replace(`${R2_PUBLIC_URL}/`, "");
+  if (!url || !R2_PUBLIC_URL) return;
+  let key: string;
+  try {
+    const objectUrl = new URL(url);
+    const publicBase = new URL(`${R2_PUBLIC_URL}/`);
+    if (objectUrl.origin !== publicBase.origin || !objectUrl.pathname.startsWith(publicBase.pathname)) return;
+    key = objectUrl.pathname.slice(publicBase.pathname.length);
+    if (!key) return;
+  } catch {
+    return;
+  }
   try {
     const command = new DeleteObjectCommand({
       Bucket: R2_BUCKET,
@@ -75,50 +190,9 @@ async function deleteFromR2(url: string) {
   }
 }
 
-async function initDB() {
-  try {
-    await fs.access(path.join(__dirname, "data"));
-  } catch {
-    await fs.mkdir(path.join(__dirname, "data"));
-  }
-
-  try {
-    await fs.access(UPLOADS_DIR);
-  } catch {
-    await fs.mkdir(UPLOADS_DIR);
-  }
-
-  const THUMBNAILS_DIR = path.join(UPLOADS_DIR, "thumbnails");
-  try {
-    await fs.access(THUMBNAILS_DIR);
-  } catch {
-    await fs.mkdir(THUMBNAILS_DIR);
-  }
-
-  try {
-    const dbExists = await fs.access(DB_PATH).then(() => true).catch(() => false);
-    if (!dbExists) {
-      const initialDB = { 
-        portfolio: [], project: [], personal: [], 
-        about: { title: "KeenVi", description: "Studio...", bio: "Bio...", career: [], skills: [], tools: [] },
-        intro: { logoText: "KEENVI", headline: "Artist", links: {}, gateways: {} },
-        categories: { portfolio: [], project: [], personal: [] }
-      };
-      await fs.writeFile(DB_PATH, JSON.stringify(initialDB, null, 2), "utf-8");
-    }
-    const messExists = await fs.access(MESSAGES_PATH).then(() => true).catch(() => false);
-    if (!messExists) {
-      await fs.writeFile(MESSAGES_PATH, "[]", "utf-8");
-    }
-  } catch (err) {
-    console.error("DB Init failed:", err);
-  }
-}
-
 async function startServer() {
-  await initDB();
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Request logging middleware
   app.use((req, res, next) => {
@@ -126,40 +200,24 @@ async function startServer() {
     next();
   });
 
-  app.use(express.json());
-  app.use("/uploads", express.static(UPLOADS_DIR));
+  app.use(express.json({ limit: "256kb" }));
 
   // --- API ROUTES FIRST ---
-  app.get("/api/test", (req, res) => res.json({ message: "express is alive" }));
   app.get("/api/health", (req, res) => res.json({ status: "ok" }));
+  app.get("/api/admin/me", requireAdmin, (req: any, res) => {
+    res.json({ authorized: true, email: req.user.email });
+  });
 
   // Upload Original
-  app.post("/api/upload", upload.single("file"), async (req: any, res, next) => {
+  app.post("/api/upload", requireAdmin, upload.single("file"), async (req: any, res, next) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     try {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-      const ext = path.extname(req.file.filename).toLowerCase();
+      const ext = EXTENSIONS_BY_MIME[req.file.mimetype];
       const mainKey = `uploads/${uniqueSuffix}${ext}`;
-      
-      const originalUrl = await uploadToR2(req.file.path, mainKey, req.file.mimetype);
-      let thumbnailUrl = originalUrl;
 
-      // Temporarily disabled thumbnail generation for original image upload to isolate issues
-      /*
-      const isImage = [".jpg", ".jpeg", ".png", ".webp"].includes(ext);
-      if (isImage) {
-        const thumbFilename = `thumb-${uniqueSuffix}.jpg`;
-        const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
-        const thumbKey = `uploads/thumbnails/${thumbFilename}`;
-        
-        // Resize to 450px as requested for original upload thumbnail
-        await sharp(req.file.path).resize({ width: 450 }).jpeg({ quality: 90 }).toFile(thumbPath);
-        thumbnailUrl = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
-        await fs.unlink(thumbPath).catch(() => {});
-      }
-      */
-      await fs.unlink(req.file.path).catch(() => {});
-      res.json({ url: originalUrl, thumbnailUrl });
+      const originalUrl = await uploadToR2(req.file.buffer, mainKey, req.file.mimetype);
+      res.json({ url: originalUrl, thumbnailUrl: originalUrl });
     } catch (err: any) {
       console.error("R2 Upload error:", err);
       next(err);
@@ -167,26 +225,21 @@ async function startServer() {
   });
 
   // Upload Thumbnail only (수동으로 그대로 저장)
-  app.post("/api/upload/thumbnail", upload.single("file"), async (req: any, res, next) => {
+  app.post("/api/upload/thumbnail", requireAdmin, upload.single("file"), async (req: any, res, next) => {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
     try {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
       const thumbFilename = `t-${uniqueSuffix}.jpg`;
-      const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
       const thumbKey = `uploads/thumbnails/${thumbFilename}`;
       
-      // Get dimensions before processing (or just use the uploaded file)
-      const metadata = await sharp(req.file.path).metadata();
+      const image = sharp(req.file.buffer, { limitInputPixels: 40_000_000 });
+      const metadata = await image.metadata();
       const width = metadata.width || 0;
       const height = metadata.height || 0;
       const ratio = width && height ? parseFloat((width / height).toFixed(3)) : 1;
 
-      // Just convert to jpeg without resizing as requested for manual upload
-      await sharp(req.file.path).jpeg({ quality: 90 }).toFile(thumbPath);
-      
-      const url = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
-      await fs.unlink(req.file.path).catch(() => {});
-      await fs.unlink(thumbPath).catch(() => {});
+      const thumbnail = await image.jpeg({ quality: 90 }).toBuffer();
+      const url = await uploadToR2(thumbnail, thumbKey, "image/jpeg");
       
       res.json({ url, width, height, ratio });
     } catch (err: any) {
@@ -196,32 +249,18 @@ async function startServer() {
   });
 
   // Generate high-quality thumbnail from URL (CORS safe, sharp filter)
-  app.post("/api/generate-thumbnail-from-url", async (req, res, next) => {
+  app.post("/api/generate-thumbnail-from-url", requireAdmin, async (req, res, next) => {
     const { imageUrl, width } = req.body;
-    if (!imageUrl) {
+    if (typeof imageUrl !== "string" || !imageUrl) {
       return res.status(400).json({ error: "imageUrl is required" });
     }
-    const targetWidth = parseInt(width) || 450;
+    const parsedWidth = Number.parseInt(String(width), 10) || 450;
+    const targetWidth = Math.min(Math.max(parsedWidth, 64), 2000);
 
     try {
-      let buffer: Buffer;
-      if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
-        const response = await fetch(imageUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch image from URL: ${response.status} ${response.statusText}`);
-        }
-        const arrayBuffer = await response.arrayBuffer();
-        buffer = Buffer.from(arrayBuffer);
-      } else if (imageUrl.startsWith("/uploads/")) {
-        const localRelativePath = imageUrl.replace(/^\/uploads\//, "");
-        const fullLocalPath = path.join(UPLOADS_DIR, localRelativePath);
-        buffer = await fs.readFile(fullLocalPath);
-      } else {
-        const fullLocalPath = path.join(__dirname, imageUrl);
-        buffer = await fs.readFile(fullLocalPath);
-      }
+      const buffer = await fetchAllowedImage(imageUrl);
 
-      const image = sharp(buffer);
+      const image = sharp(buffer, { limitInputPixels: 40_000_000 });
       const metadata = await image.metadata();
 
       const originalWidth = metadata.width || 0;
@@ -241,18 +280,15 @@ async function startServer() {
         .replace(/^-|-$/g, '');
 
       const thumbFilename = `t-${safeName ? safeName + '-' : ''}${uniqueSuffix}.jpg`;
-      const thumbPath = path.join(UPLOADS_DIR, "thumbnails", thumbFilename);
       const thumbKey = `uploads/thumbnails/${thumbFilename}`;
 
-      // High-quality resizing using sharp with sharpen filter
-      await image
+      const thumbnail = await image
         .resize({ width: targetWidth, fit: 'inside', withoutEnlargement: false })
         .sharpen({ sigma: 0.5, m1: 1.0, m2: 2.0 })
         .jpeg({ quality: 90 })
-        .toFile(thumbPath);
+        .toBuffer();
 
-      const url = await uploadToR2(thumbPath, thumbKey, "image/jpeg");
-      await fs.unlink(thumbPath).catch(() => {});
+      const url = await uploadToR2(thumbnail, thumbKey, "image/jpeg");
 
       res.json({
         url,
@@ -266,128 +302,34 @@ async function startServer() {
     }
   });
 
-  app.post("/api/storage/cleanup", async (req, res) => {
+  app.post("/api/storage/cleanup", requireAdmin, async (req, res) => {
     const { urls } = req.body;
-    if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: "Invalid urls" });
+    if (!Array.isArray(urls) || urls.length > 100 || urls.some((url) => typeof url !== "string")) {
+      return res.status(400).json({ error: "Invalid urls" });
+    }
     try {
       for (const url of urls) await deleteFromR2(url);
       res.json({ status: "success" });
     } catch (err) { res.status(500).json({ error: "Cleanup failed" }); }
   });
 
-  // DB Getters
-  app.get("/api/categories", async (req, res) => {
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    res.json(data.categories || { portfolio: [], project: [], personal: [] });
-  });
-
-  app.get("/api/gallery/:type", async (req, res) => {
-    const { type } = req.params;
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    const items = data[type] || [];
-    res.json([...items].sort((a, b) => (b.order ?? 0) - (a.order ?? 0) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
-  });
-
-  app.get("/api/about", async (req, res) => {
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    res.json(data.about || {});
-  });
-
-  app.get("/api/intro", async (req, res) => {
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    res.json(data.intro || {});
-  });
-
-  // DB Setters
-  app.post("/api/gallery/:type", async (req, res) => {
-    const { type } = req.params;
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    if (!data[type]) data[type] = [];
-    const maxOrder = data[type].length > 0 ? Math.max(...data[type].map((i: any) => i.order || 0)) : -1;
-    const newItem = { ...req.body, id: Date.now().toString(), createdAt: new Date().toISOString(), order: maxOrder + 1 };
-    data[type].unshift(newItem);
-    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-    res.json(newItem);
-  });
-
-  app.put("/api/gallery/:type/:id", async (req, res) => {
-    const { type, id } = req.params;
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    const idx = data[type].findIndex((i: any) => i.id === id);
-    if (idx !== -1) {
-      data[type][idx] = { ...data[type][idx], ...req.body };
-      await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json(data[type][idx]);
-    } else res.status(404).json({ error: "Not found" });
-  });
-
-  app.delete("/api/gallery/:type/:id", async (req, res) => {
-    const { type, id } = req.params;
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    const item = data[type].find((i: any) => i.id === id);
-    if (item) {
-      if (item.imageUrl) await deleteFromR2(item.imageUrl);
-      if (item.thumbnailUrl) await deleteFromR2(item.thumbnailUrl);
-      data[type] = data[type].filter((i: any) => i.id !== id);
-      await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-      res.json({ status: "success" });
-    } else res.status(404).json({ error: "Not found" });
-  });
-
-  app.put("/api/gallery/:type/reorder", async (req, res) => {
-    const { type } = req.params;
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    data[type] = req.body.items;
-    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-    res.json(data[type]);
-  });
-
-  app.put("/api/intro", async (req, res) => {
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    data.intro = req.body;
-    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-    res.json(data.intro);
-  });
-
-  app.put("/api/about", async (req, res) => {
-    const data = JSON.parse(await fs.readFile(DB_PATH, "utf-8"));
-    data.about = req.body;
-    await fs.writeFile(DB_PATH, JSON.stringify(data, null, 2));
-    res.json(data.about);
-  });
-
-  // Error Handler
-  app.use((err: any, req: any, res: any, next: any) => {
-    console.error("Express Error:", err);
-    res.status(err.status || 500).json({ 
-      error: err.message || "Internal Server Error",
-      stack: process.env.NODE_ENV === "development" ? err.stack : undefined
-    });
-  });
-
-  app.post("/api/admin/login", (req, res) => {
-    const { id, password } = req.body;
-    if ((id === "keenvi" && password === "667429") || (id === "admin" && password === "admin12345")) {
-      res.json({ token: "auth-token", type: id === "admin" ? "master" : "normal" });
-    } else res.status(401).json({ error: "Invalid credentials" });
-  });
-
-  app.post("/api/contact", async (req, res) => {
-    const messages = JSON.parse(await fs.readFile(MESSAGES_PATH, "utf-8"));
-    messages.push({ id: Date.now().toString(), ...req.body, date: new Date().toISOString() });
-    await fs.writeFile(MESSAGES_PATH, JSON.stringify(messages, null, 2));
-    res.json({ status: "success" });
-  });
-
   // --- VITE MIDDLEWARE ---
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    app.get("/", (_req, res) => res.json({ service: "keenvi-studio-api", status: "ok" }));
+    app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));
   }
+
+  app.use((err: any, _req: any, res: any, _next: any) => {
+    console.error("Express Error:", err);
+    res.status(err.status || 500).json({
+      error: err.message || "Internal Server Error",
+      stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+    });
+  });
 
   app.listen(PORT, "0.0.0.0", () => console.log(`Server listening on port ${PORT}`));
 }

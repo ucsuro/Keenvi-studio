@@ -1,14 +1,16 @@
-import { useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect } from 'react';
 import Navigation from './components/Navigation';
-import Intro from './components/Intro';
-import Gallery from './components/Gallery';
-import About from './components/About';
-import Contact from './components/Contact';
-import Admin from './components/Admin';
 import { cn } from './lib/utils';
 import { supabase } from './lib/supabase';
 import { trackPageView } from './lib/analytics';
 import { DEFAULT_CATEGORIES } from './constants/defaults';
+import { verifyAdminAccess } from './lib/api';
+
+const Intro = lazy(() => import('./components/Intro'));
+const Gallery = lazy(() => import('./components/Gallery'));
+const About = lazy(() => import('./components/About'));
+const Contact = lazy(() => import('./components/Contact'));
+const Admin = lazy(() => import('./components/Admin'));
 
 type Page = 'Intro' | 'Portfolio' | 'Project' | 'Personal Work' | 'About' | 'Contact' | 'Admin';
 
@@ -47,20 +49,14 @@ export default function App() {
   useEffect(() => {
     fetchCategories();
     
-    // Check hardcoded login
-    if (localStorage.getItem('keenvi_auth') === 'hardcoded') {
-      setIsLoggedIn(true);
-    }
-    
     // Auth state listener
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session) {
-        setIsLoggedIn(true);
-      } else {
-        if (localStorage.getItem('keenvi_auth') !== 'hardcoded') {
-          setIsLoggedIn(false);
-        }
+      if (!session) {
+        setIsLoggedIn(false);
+        return;
       }
+
+      void verifyAdminAccess(session.access_token).then(setIsLoggedIn).catch(() => setIsLoggedIn(false));
     });
 
     return () => subscription.unsubscribe();
@@ -70,23 +66,20 @@ export default function App() {
     e.preventDefault();
     setLoginError(null);
     try {
-      // Hardcoded admin check
-      if (adminId.trim() === 'keenvi' && adminPw.trim() === 'admin123456') {
-        setIsLoggedIn(true);
-        localStorage.setItem('keenvi_auth', 'hardcoded');
-        setShowLoginModal(false);
-        setAdminId('');
-        setAdminPw('');
-        setLoginError(null);
-        return;
-      }
-
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email: adminId.trim(),
         password: adminPw.trim(),
       });
       if (error) throw error;
+
+      const isAdmin = Boolean(data.session?.access_token)
+        && await verifyAdminAccess(data.session!.access_token);
+      if (!isAdmin) {
+        await supabase.auth.signOut();
+        throw new Error('이 계정에는 관리자 권한이 없습니다.');
+      }
       
+      setIsLoggedIn(true);
       setShowLoginModal(false);
       setAdminId('');
       setAdminPw('');
@@ -99,7 +92,6 @@ export default function App() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setIsLoggedIn(false);
-    localStorage.removeItem('keenvi_auth');
     setActivePage('Intro');
   };
 
@@ -126,7 +118,9 @@ export default function App() {
       case 'Contact':
         return <Contact />;
       case 'Admin':
-        return <Admin onCategoriesChange={fetchCategories} />;
+        return isLoggedIn
+          ? <Admin onCategoriesChange={fetchCategories} />
+          : <Intro onNavigate={setActivePage} />;
       default:
         return <Intro onNavigate={setActivePage} />;
     }
@@ -146,7 +140,9 @@ export default function App() {
       />
       
       <main className="flex-grow relative pt-20">
-        {renderPage()}
+        <Suspense fallback={<div className="min-h-[60vh]" aria-label="Loading page" />}>
+          {renderPage()}
+        </Suspense>
       </main>
 
       <footer className="relative z-10 py-12 border-t border-white/5 text-center flex flex-col items-center">
@@ -190,7 +186,7 @@ export default function App() {
             <form onSubmit={handleLogin} className="space-y-6">
               <input
                 type="text"
-                placeholder="USERNAME / EMAIL"
+                placeholder="EMAIL"
                 value={adminId}
                 onChange={e => setAdminId(e.target.value)}
                 className="w-full bg-black border-b border-white/10 py-3 focus:outline-none focus:border-white text-sm"

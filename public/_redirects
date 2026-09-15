@@ -1,7 +1,5 @@
-# Netlify SPA Routing fallback - Prevents 404 on page refreshes
-/*    /index.html   200
+# Proxy authenticated API calls to the dedicated Keenvi Studio Cloud Run service.
+/api/*   https://keenvi-studio-api-1046121485048.asia-east1.run.app/api/:splat   200
 
-# Proxy internal API calls to the server backend (Cloud Run container hosted in AI Studio)
-# Replace the URL below with your active backend APP_URL if needed
-/api/*   https://ais-pre-w2uwut5a7bjxqpmaoqsuok-25710283100.asia-east1.run.app/api/:splat   200
-/uploads/*   https://ais-pre-w2uwut5a7bjxqpmaoqsuok-25710283100.asia-east1.run.app/uploads/:splat   200
+# Netlify SPA fallback must remain after the more specific proxy rules.
+/*    /index.html   200

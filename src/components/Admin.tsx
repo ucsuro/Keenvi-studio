@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Trash2, X, Upload, Check, ChevronUp, ChevronDown, RefreshCcw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { apiFetch, verifyAdminAccess } from '../lib/api';
 import { DEFAULT_INTRO, DEFAULT_ABOUT, DEFAULT_CATEGORIES } from '../constants/defaults';
 import { cn } from '../lib/utils';
 
@@ -127,23 +128,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     height: 0,
     ratio: 1
   });
-
-  // Periodically send keep-alive pings to keep the cookie active
-  useEffect(() => {
-    const keepAlive = async () => {
-      try {
-        await fetch('/api/test', { credentials: 'include' });
-      } catch (err) {
-        console.warn('Keep-alive ping failed:', err);
-      }
-    };
-    // Ping immediately on mount
-    keepAlive();
-    
-    // Set interval for 2.5 minutes
-    const interval = setInterval(keepAlive, 150000);
-    return () => clearInterval(interval);
-  }, []);
 
   useEffect(() => {
     localStorage.setItem('keenvi_admin_tab', activeTab);
@@ -339,7 +323,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
     if (r2Urls.length > 0) {
       try {
-        await fetch('/api/storage/cleanup', {
+        await apiFetch('/api/storage/cleanup', {
           method: 'POST',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
@@ -366,11 +350,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }));
 
     try {
-      // Pre-flight session validation to ensure cookie/auth is active
       try {
-        const testResp = await fetch('/api/test', { credentials: 'include' });
-        const testText = await testResp.text();
-        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+        if (!(await verifyAdminAccess())) {
           alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
           window.location.reload();
           return;
@@ -380,14 +361,13 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
 
       const { data: { user } } = await supabase.auth.getUser();
-      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
 
-      if (!user && !isHardcoded) {
+      if (!user) {
         throw new Error('인증 세션이 없습니다.');
       }
 
       // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
-      const response = await fetch('/api/generate-thumbnail-from-url', {
+      const response = await apiFetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -470,11 +450,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     setLoading(true);
     setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'loading' }));
     try {
-      // Pre-flight session validation to ensure cookie/auth is active
       try {
-        const testResp = await fetch('/api/test', { credentials: 'include' });
-        const testText = await testResp.text();
-        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+        if (!(await verifyAdminAccess())) {
           alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
           window.location.reload();
           return;
@@ -484,14 +461,13 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
 
       const { data: { user } } = await supabase.auth.getUser();
-      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
       
-      if (!user && !isHardcoded) {
+      if (!user) {
         throw new Error('인증 세션이 없습니다.');
       }
 
       // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
-      const response = await fetch('/api/generate-thumbnail-from-url', {
+      const response = await apiFetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -613,9 +589,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
       
-      if (!user && !isHardcoded) {
+      if (!user) {
         throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
       }
 
@@ -663,11 +638,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleFileUpload = async (file: File) => {
     try {
-      // Pre-flight session validation to ensure cookie/auth is active
       try {
-        const testResp = await fetch('/api/test', { credentials: 'include' });
-        const testText = await testResp.text();
-        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+        if (!(await verifyAdminAccess())) {
           alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
           window.location.reload();
           return null;
@@ -679,7 +651,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/upload', {
+      const response = await apiFetch('/api/upload', {
         method: 'POST',
         credentials: 'include',
         body: formData,
@@ -722,11 +694,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleManualThumbnailUpload = async (file: File) => {
     try {
-      // Pre-flight session validation to ensure cookie/auth is active
       try {
-        const testResp = await fetch('/api/test', { credentials: 'include' });
-        const testText = await testResp.text();
-        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+        if (!(await verifyAdminAccess())) {
           alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
           window.location.reload();
           return null;
@@ -738,7 +707,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch('/api/upload/thumbnail', {
+      const response = await apiFetch('/api/upload/thumbnail', {
         method: 'POST',
         credentials: 'include',
         body: formData,
@@ -790,9 +759,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     setIsGeneratingNewThumb(true);
     try {
       try {
-        const testResp = await fetch('/api/test', { credentials: 'include' });
-        const testText = await testResp.text();
-        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+        if (!(await verifyAdminAccess())) {
           alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
           window.location.reload();
           return;
@@ -802,9 +769,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       }
 
       const { data: { user } } = await supabase.auth.getUser();
-      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
 
-      if (!user && !isHardcoded) {
+      if (!user) {
         throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
       }
 
@@ -823,7 +789,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
           throw new Error('파일 업로드 및 썸네일 생성에 실패했습니다.');
         }
       } else if (newArt.imageUrl) {
-        const response = await fetch('/api/generate-thumbnail-from-url', {
+        const response = await apiFetch('/api/generate-thumbnail-from-url', {
           method: 'POST',
           credentials: 'include',
           headers: {
@@ -872,9 +838,8 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const isHardcoded = localStorage.getItem('keenvi_auth') === 'hardcoded';
       
-      if (!user && !isHardcoded) {
+      if (!user) {
         throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
       }
 
@@ -905,7 +870,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       // If it's a URL link and we don't have a distinct thumbnail yet, generate high-quality 450px wide on server (CORS safe, sharp library)
       if (newArt.imageUrl && (finalThumbnailUrl === newArt.imageUrl || !finalThumbnailUrl)) {
         try {
-          const tResp = await fetch('/api/generate-thumbnail-from-url', {
+          const tResp = await apiFetch('/api/generate-thumbnail-from-url', {
             method: 'POST',
             credentials: 'include',
             headers: {
@@ -1291,20 +1256,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
               {tab === 'about' ? 'About Context' : tab === 'intro' ? 'Intro Context' : `${tab} Gallery`}
             </button>
           ))}
-          <button 
-            onClick={async () => {
-              try {
-                const res = await fetch('/api/test', { credentials: 'include' });
-                const data = await res.json();
-                alert('API Status: ' + (data.message || 'Error'));
-              } catch (e: any) {
-                alert('API failed: ' + e.message);
-              }
-            }}
-            className="text-left px-6 py-4 text-[8px] uppercase tracking-[0.3em] font-bold text-neutral-600 border border-white/5 hover:border-white/20 mt-4 transition-all"
-          >
-            Test backend API
-          </button>
         </div>
 
         {/* Content */}

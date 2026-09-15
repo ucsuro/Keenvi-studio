@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, ChevronLeft, ChevronRight, Maximize2, Search, Upload, Loader2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
+import { apiFetch, verifyAdminAccess } from '../lib/api';
 import { trackImageClick } from '../lib/analytics';
 
 interface GalleryItem {
@@ -44,24 +45,28 @@ export default function Gallery({ type, subCategory }: Props) {
   };
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsAdmin(!!session || localStorage.getItem('keenvi_auth') === 'hardcoded');
-    });
-
-    // Periodically send keep-alive pings to keep the cloud cookie session active
-    const keepAlive = async () => {
+    const refreshAdminAccess = async (accessToken?: string) => {
       try {
-        await fetch('/api/test', { credentials: 'include' });
-      } catch (err) {
-        console.warn('Keep-alive ping failed:', err);
+        setIsAdmin(await verifyAdminAccess(accessToken));
+      } catch {
+        setIsAdmin(false);
       }
     };
-    // Ping immediately on mount
-    keepAlive();
-    
-    // Set interval for 2.5 minutes
-    const interval = setInterval(keepAlive, 150000);
-    return () => clearInterval(interval);
+
+    void refreshAdminAccess();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        setIsAdmin(false);
+        return;
+      }
+
+      void refreshAdminAccess(session.access_token);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
   const [editingItem, setEditingItem] = useState<GalleryItem | null>(null);
@@ -99,11 +104,8 @@ export default function Gallery({ type, subCategory }: Props) {
 
     setFormLoading(true);
     try {
-      // Pre-flight session validation to ensure cookie/auth is active
       try {
-        const testResp = await fetch('/api/test', { credentials: 'include' });
-        const testText = await testResp.text();
-        if (testText.includes('Cookie check') || testText.includes('doctype html') || testText.includes('<html')) {
+        if (!(await verifyAdminAccess())) {
           alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
           window.location.reload();
           return;
@@ -117,9 +119,8 @@ export default function Gallery({ type, subCategory }: Props) {
 
       // Manual thumbnail doesn't resize, while original upload generates 450px thumbnail automatically
       const endpoint = isThumbnail ? '/api/upload/thumbnail' : '/api/upload';
-      const response = await fetch(endpoint, {
+      const response = await apiFetch(endpoint, {
         method: 'POST',
-        credentials: 'include',
         body: formData,
       });
 
