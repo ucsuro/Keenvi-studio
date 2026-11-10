@@ -112,7 +112,7 @@ export default function App() {
       case 'Portfolio':
       case 'Project':
       case 'Personal Work':
-        return <Gallery type={activePage.toLowerCase() as any} subCategory={subCategory} />;
+        return <Gallery type={activePage.toLowerCase() as any} subCategory={subCategory} isAdmin={isLoggedIn} />;
       case 'About':
         return <About />;
       case 'Contact':

@@ -22,28 +22,20 @@ interface GalleryItem {
 interface Props {
   type: 'portfolio' | 'project' | 'personal work';
   subCategory: string | null;
+  isAdmin: boolean;
 }
 
-export default function Gallery({ type, subCategory }: Props) {
+export default function Gallery({ type, subCategory, isAdmin }: Props) {
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [visibleCount, setVisibleCount] = useState(12);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [isZoomed, setIsZoomed] = useState(false);
-  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [columnsCount, setColumnsCount] = useState(4);
-  const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [viewerImageFailed, setViewerImageFailed] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-
-  const handleImageLoad = (id: string) => {
-    setLoadedImages(prev => ({ ...prev, [id]: true }));
-  };
 
   const tryImageFallback = (
     image: HTMLImageElement,
@@ -59,31 +51,6 @@ export default function Gallery({ type, subCategory }: Props) {
     }
     onExhausted();
   };
-
-  useEffect(() => {
-    const refreshAdminAccess = async (accessToken?: string) => {
-      try {
-        setIsAdmin(await verifyAdminAccess(accessToken));
-      } catch {
-        setIsAdmin(false);
-      }
-    };
-
-    void refreshAdminAccess();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) {
-        setIsAdmin(false);
-        return;
-      }
-
-      void refreshAdminAccess(session.access_token);
-    });
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, []);
 
   const [editingItem, setEditingItem] = useState<GalleryItem | null>(null);
   const [editForm, setEditForm] = useState({
@@ -262,7 +229,7 @@ export default function Gallery({ type, subCategory }: Props) {
   useEffect(() => {
     const initialCount = Math.max(12, columnsCount * 4);
     setVisibleCount(initialCount);
-  }, [columnsCount]);
+  }, [type, subCategory, columnsCount]);
 
   // Intersection Observer for infinite scroll
   useEffect(() => {
@@ -359,9 +326,7 @@ export default function Gallery({ type, subCategory }: Props) {
     }
 
     fetchItems();
-    // Reset visible count when category change
-    setVisibleCount(Math.max(12, columnsCount * 4));
-  }, [type, subCategory, columnsCount]);
+  }, [type, subCategory]);
 
   const openLightbox = (index: number) => {
     setSelectedIndex(index);
@@ -399,16 +364,6 @@ export default function Gallery({ type, subCategory }: Props) {
     setSelectedIndex((selectedIndex - 1 + items.length) % items.length);
     setIsZoomed(false);
     setViewerImageFailed(false);
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    // Parallax mouse effect is disabled in favor of scrollable 100% zoom
-    if (isZoomed) return;
-    
-    const { clientX, clientY } = e;
-    const { innerWidth, innerHeight } = window;
-    
-    // ... rest of logic for normal mode if needed, but keeping it empty for now to simplify
   };
 
   if (loading) {
@@ -464,14 +419,8 @@ export default function Gallery({ type, subCategory }: Props) {
               const gallerySource = item.thumbnailUrl || item.imageUrl;
               const galleryFallbacks = item.imageUrl !== gallerySource ? [item.imageUrl] : [];
               return (
-                <motion.div
+                <div
                   key={item.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ 
-                    delay: originalIndex < 12 ? originalIndex * 0.06 : 0.05, 
-                    duration: 0.6
-                  }}
                   className="relative group cursor-pointer overflow-hidden bg-neutral-900 rounded-sm"
                   style={{ 
                     aspectRatio: item.width && item.height ? `${item.width} / ${item.height}` : undefined,
@@ -479,10 +428,6 @@ export default function Gallery({ type, subCategory }: Props) {
                   }}
                   onClick={() => openLightbox(originalIndex)}
                 >
-                  {/* Placeholder Skeleton */}
-                  {!loadedImages[item.id] && !failedImages[item.id] && (
-                    <div className="absolute inset-0 bg-neutral-800/40 animate-pulse" />
-                  )}
                   {failedImages[item.id] && (
                     <div className="absolute inset-0 flex items-center justify-center bg-neutral-900 px-6 text-center text-[10px] uppercase tracking-[0.2em] text-neutral-500">
                       Image unavailable
@@ -492,16 +437,12 @@ export default function Gallery({ type, subCategory }: Props) {
                   <img
                     src={gallerySource}
                     alt={item.title}
-                    onLoad={() => handleImageLoad(item.id)}
                     onError={(event) => {
                       tryImageFallback(event.currentTarget, galleryFallbacks, () => {
                         setFailedImages(prev => ({ ...prev, [item.id]: true }));
                       });
                     }}
-                    className={cn(
-                      "w-full  h-auto transition-all duration-1000 group-hover:scale-105 block mx-auto",
-                      loadedImages[item.id] ? "opacity-100" : "opacity-0"
-                    )}
+                    className="w-full h-auto transition-transform duration-200 group-hover:scale-105 block mx-auto"
                     referrerPolicy="no-referrer"
                     loading={originalIndex < columnsCount ? 'eager' : 'lazy'}
                     fetchPriority={originalIndex < columnsCount ? 'high' : 'auto'}
@@ -518,7 +459,7 @@ export default function Gallery({ type, subCategory }: Props) {
                     </div>
                   </div>
                   <div className="absolute inset-0 border border-white/5 group-hover:border-white/10 transition-colors pointer-events-none" />
-                </motion.div>
+                </div>
               );
             })}
           </div>
@@ -539,7 +480,6 @@ export default function Gallery({ type, subCategory }: Props) {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-[10000] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center select-none"
-            onMouseMove={handleMouseMove}
           >
             {/* Control Bar */}
             <div className="absolute top-0 left-0 w-full p-10 flex justify-between items-center z-[10002] pointer-events-none">
@@ -608,7 +548,6 @@ export default function Gallery({ type, subCategory }: Props) {
               >
                 {!viewerImageFailed ? (
                   <img
-                    ref={imgRef}
                     src={items[selectedIndex].imageUrl}
                     alt={items[selectedIndex].title}
                     className={cn(
