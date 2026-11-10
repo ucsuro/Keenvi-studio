@@ -35,7 +35,6 @@ export default function Gallery({ type, subCategory }: Props) {
   const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [viewerImageFailed, setViewerImageFailed] = useState(false);
-  const [viewerOriginalLoaded, setViewerOriginalLoaded] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -368,7 +367,6 @@ export default function Gallery({ type, subCategory }: Props) {
     setSelectedIndex(index);
     setIsZoomed(false);
     setViewerImageFailed(false);
-    setViewerOriginalLoaded(false);
     
     // Track image click
     if (items[index]) {
@@ -379,7 +377,6 @@ export default function Gallery({ type, subCategory }: Props) {
     setSelectedIndex(null);
     setIsZoomed(false);
     setViewerImageFailed(false);
-    setViewerOriginalLoaded(false);
   };
 
   const nextImage = (e?: React.MouseEvent) => {
@@ -391,7 +388,6 @@ export default function Gallery({ type, subCategory }: Props) {
     setSelectedIndex((selectedIndex + 1) % items.length);
     setIsZoomed(false);
     setViewerImageFailed(false);
-    setViewerOriginalLoaded(false);
   };
 
   const prevImage = (e?: React.MouseEvent) => {
@@ -403,7 +399,6 @@ export default function Gallery({ type, subCategory }: Props) {
     setSelectedIndex((selectedIndex - 1 + items.length) % items.length);
     setIsZoomed(false);
     setViewerImageFailed(false);
-    setViewerOriginalLoaded(false);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -612,37 +607,24 @@ export default function Gallery({ type, subCategory }: Props) {
                 )}
               >
                 {!viewerImageFailed ? (
-                  <>
-                    {!viewerOriginalLoaded && !isZoomed && items[selectedIndex].thumbnailUrl && (
-                      <img
-                        src={items[selectedIndex].thumbnailUrl}
-                        alt=""
-                        aria-hidden="true"
-                        className="absolute inset-0 h-full w-full object-contain shadow-2xl"
-                        referrerPolicy="no-referrer"
-                      />
+                  <img
+                    ref={imgRef}
+                    src={items[selectedIndex].imageUrl}
+                    alt={items[selectedIndex].title}
+                    className={cn(
+                      "shadow-2xl flex-shrink-0",
+                      isZoomed ? "max-w-none cursor-zoom-out" : "w-auto h-auto max-w-full max-h-full object-contain"
                     )}
-                    <img
-                      ref={imgRef}
-                      src={items[selectedIndex].imageUrl}
-                      alt={items[selectedIndex].title}
-                      className={cn(
-                        "shadow-2xl flex-shrink-0 transition-opacity duration-150",
-                        viewerOriginalLoaded ? "opacity-100" : "opacity-0",
-                        isZoomed ? "max-w-none cursor-zoom-out" : "w-auto h-auto max-w-full max-h-full object-contain"
-                      )}
-                      onLoad={() => setViewerOriginalLoaded(true)}
-                      onClick={() => setIsZoomed(!isZoomed)}
-                      onError={(event) => {
-                        const viewerFallbacks = items[selectedIndex].thumbnailUrl
-                          ? [items[selectedIndex].thumbnailUrl]
-                          : [];
-                        tryImageFallback(event.currentTarget, viewerFallbacks, () => setViewerImageFailed(true));
-                      }}
-                      referrerPolicy="no-referrer"
-                      decoding="async"
-                    />
-                  </>
+                    onClick={() => setIsZoomed(!isZoomed)}
+                    onError={(event) => {
+                      const viewerFallbacks = items[selectedIndex].thumbnailUrl
+                        ? [items[selectedIndex].thumbnailUrl]
+                        : [];
+                      tryImageFallback(event.currentTarget, viewerFallbacks, () => setViewerImageFailed(true));
+                    }}
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                  />
                 ) : (
                   <div className="flex min-h-64 min-w-64 items-center justify-center border border-white/10 bg-neutral-950 px-10 text-center text-xs uppercase tracking-[0.2em] text-neutral-500">
                     Original image unavailable
