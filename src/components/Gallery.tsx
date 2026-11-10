@@ -5,7 +5,6 @@ import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 import { apiFetch, verifyAdminAccess } from '../lib/api';
 import { trackImageClick } from '../lib/analytics';
-import { netlifyImageUrl, uniqueImageUrls } from '../lib/images';
 
 interface GalleryItem {
   id: string;
@@ -402,28 +401,6 @@ export default function Gallery({ type, subCategory }: Props) {
     setViewerImageFailed(false);
   };
 
-  useEffect(() => {
-    if (selectedIndex === null || items.length < 2) return;
-
-    const adjacentIndexes = [
-      (selectedIndex + 1) % items.length,
-      (selectedIndex - 1 + items.length) % items.length
-    ];
-
-    const preloads = adjacentIndexes.map(index => {
-      const preload = new Image();
-      preload.decoding = 'async';
-      preload.src = netlifyImageUrl(items[index].imageUrl, { width: 2000, quality: 85 });
-      return preload;
-    });
-
-    return () => {
-      preloads.forEach(preload => {
-        preload.src = '';
-      });
-    };
-  }, [selectedIndex, items]);
-
   const handleMouseMove = (e: React.MouseEvent) => {
     // Parallax mouse effect is disabled in favor of scrollable 100% zoom
     if (isZoomed) return;
@@ -485,12 +462,7 @@ export default function Gallery({ type, subCategory }: Props) {
               // Get original index for lightbox
               const originalIndex = items.findIndex(i => i.id === item.id);
               const gallerySource = item.thumbnailUrl || item.imageUrl;
-              const optimizedGallerySource = netlifyImageUrl(gallerySource, { width: 720, quality: 82 });
-              const galleryFallbacks = uniqueImageUrls([
-                optimizedGallerySource !== gallerySource ? gallerySource : undefined,
-                item.imageUrl !== gallerySource ? netlifyImageUrl(item.imageUrl, { width: 720, quality: 82 }) : undefined,
-                item.imageUrl !== gallerySource ? item.imageUrl : undefined
-              ]);
+              const galleryFallbacks = item.imageUrl !== gallerySource ? [item.imageUrl] : [];
               return (
                 <motion.div
                   key={item.id}
@@ -518,9 +490,7 @@ export default function Gallery({ type, subCategory }: Props) {
                   )}
                   
                   <img
-                    src={optimizedGallerySource}
-                    srcSet={`${netlifyImageUrl(gallerySource, { width: 480, quality: 82 })} 480w, ${optimizedGallerySource} 720w`}
-                    sizes="(min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+                    src={gallerySource}
                     alt={item.title}
                     onLoad={() => handleImageLoad(item.id)}
                     onError={(event) => {
@@ -639,7 +609,7 @@ export default function Gallery({ type, subCategory }: Props) {
                 {!viewerImageFailed ? (
                   <img
                     ref={imgRef}
-                    src={isZoomed ? items[selectedIndex].imageUrl : netlifyImageUrl(items[selectedIndex].imageUrl, { width: 2400, quality: 88 })}
+                    src={items[selectedIndex].imageUrl}
                     alt={items[selectedIndex].title}
                     className={cn(
                       "shadow-2xl flex-shrink-0",
@@ -647,13 +617,9 @@ export default function Gallery({ type, subCategory }: Props) {
                     )}
                     onClick={() => setIsZoomed(!isZoomed)}
                     onError={(event) => {
-                      const viewerFallbacks = uniqueImageUrls([
-                        items[selectedIndex].imageUrl,
-                        items[selectedIndex].thumbnailUrl
-                          ? netlifyImageUrl(items[selectedIndex].thumbnailUrl, { width: 1600, quality: 85 })
-                          : undefined,
-                        items[selectedIndex].thumbnailUrl
-                      ]).filter(url => url !== event.currentTarget.src);
+                      const viewerFallbacks = items[selectedIndex].thumbnailUrl
+                        ? [items[selectedIndex].thumbnailUrl]
+                        : [];
                       tryImageFallback(event.currentTarget, viewerFallbacks, () => setViewerImageFailed(true));
                     }}
                     referrerPolicy="no-referrer"
