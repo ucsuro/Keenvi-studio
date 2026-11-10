@@ -1,0 +1,84 @@
+name: Deploy Cloud Run backend
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-backend
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate requested revision
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Use Node.js 24
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build production bundle
+        run: npm run build
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
+  deploy:
+    name: Deploy backend after approval
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: keenvi-studio
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Deploy Cloud Run service
+        run: >-
+          gcloud run deploy keenvi-studio-api
+          --project=keenvi-studio
+          --region=asia-east1
+          --source=.
+          --port=8080
+          --allow-unauthenticated
+          --service-account=keenvi-studio-api@keenvi-studio.iam.gserviceaccount.com
+          --min-instances=0
+          --max-instances=3
+          --concurrency=20
+          --timeout=60
+          --memory=1Gi
+          --cpu=1
+          --set-env-vars=NODE_ENV=production,VITE_SUPABASE_URL=${{ vars.VITE_SUPABASE_URL }},VITE_R2_PUBLIC_URL=${{ vars.VITE_R2_PUBLIC_URL }},R2_BUCKET_NAME=${{ vars.R2_BUCKET_NAME }}
+          --set-secrets=VITE_SUPABASE_ANON_KEY=keenvi-supabase-anon-key:latest,ADMIN_EMAILS=keenvi-admin-emails:latest,R2_ACCOUNT_ID=keenvi-r2-account-id:latest,R2_ACCESS_KEY_ID=keenvi-r2-access-key-id:latest,R2_SECRET_ACCESS_KEY=keenvi-r2-secret-access-key:latest
+          --quiet
+
+      - name: Verify health endpoint
+        run: curl --fail --show-error --silent --retry 5 --retry-delay 5 https://keenvi-studio-api-1046121485048.asia-east1.run.app/api/health

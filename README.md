@@ -35,6 +35,9 @@ npm.cmd run lint
 npm.cmd run build
 ```
 
+GitHub Actions repeats install, type-check, production build, and a high-severity
+production dependency audit for every pull request and push to `main`.
+
 ## Authentication
 
 Admin login uses Supabase email/password authentication. Protected Express API
@@ -65,3 +68,6 @@ new service deployment.
 
 Legacy AI Studio project:
 <https://ai.studio/apps/4d41f249-6595-4437-bd65-40e2f6c6a666>
+
+Production deployment workflows and monitoring setup are documented in
+`deploy/README.md`.

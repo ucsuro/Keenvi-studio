@@ -1,0 +1,8 @@
+[images]
+  remote_images = [
+    'https://pub-bde21e17e7494a6e968638a09c311645\.r2\.dev/.*',
+    'https://cdna\.artstation\.com/.*',
+    'https://cdnb\.artstation\.com/.*',
+    'https://hrflqequxcedcecljkfa\.supabase\.co/.*',
+    'https://img\.keenvi\.art/.*'
+  ]

@@ -9,6 +9,7 @@ coverage
 data
 uploads
 *.log
+gha-creds-*.json
 README.md
 AGENTS.md
 supabase

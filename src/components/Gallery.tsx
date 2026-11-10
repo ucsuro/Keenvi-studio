@@ -5,6 +5,7 @@ import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 import { apiFetch, verifyAdminAccess } from '../lib/api';
 import { trackImageClick } from '../lib/analytics';
+import { netlifyImageUrl, uniqueImageUrls } from '../lib/images';
 
 interface GalleryItem {
   id: string;
@@ -34,6 +35,8 @@ export default function Gallery({ type, subCategory }: Props) {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [columnsCount, setColumnsCount] = useState(4);
   const [loadedImages, setLoadedImages] = useState<Record<string, boolean>>({});
+  const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+  const [viewerImageFailed, setViewerImageFailed] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -42,6 +45,21 @@ export default function Gallery({ type, subCategory }: Props) {
 
   const handleImageLoad = (id: string) => {
     setLoadedImages(prev => ({ ...prev, [id]: true }));
+  };
+
+  const tryImageFallback = (
+    image: HTMLImageElement,
+    candidates: string[],
+    onExhausted: () => void
+  ) => {
+    const fallbackIndex = Number(image.dataset.fallbackIndex || 0);
+    if (fallbackIndex < candidates.length) {
+      image.dataset.fallbackIndex = String(fallbackIndex + 1);
+      image.srcset = '';
+      image.src = candidates[fallbackIndex];
+      return;
+    }
+    onExhausted();
   };
 
   useEffect(() => {
@@ -82,9 +100,14 @@ export default function Gallery({ type, subCategory }: Props) {
     height: 0
   });
   const [formLoading, setFormLoading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<{
+    state: 'idle' | 'uploading' | 'success' | 'error';
+    message: string;
+  }>({ state: 'idle', message: '' });
 
   const startEditing = (item: GalleryItem) => {
     setEditingItem(item);
+    setUploadStatus({ state: 'idle', message: '' });
     setEditForm({
       title: item.title || '',
       category: item.category || '',
@@ -102,16 +125,24 @@ export default function Gallery({ type, subCategory }: Props) {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const input = e.currentTarget;
+    const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif']);
+    if (!allowedTypes.has(file.type)) {
+      setUploadStatus({ state: 'error', message: 'JPEG, PNG, WebP, GIF, AVIF 파일만 업로드할 수 있습니다.' });
+      input.value = '';
+      return;
+    }
+    if (file.size > 25 * 1024 * 1024) {
+      setUploadStatus({ state: 'error', message: '파일 크기는 25MB 이하여야 합니다.' });
+      input.value = '';
+      return;
+    }
+
     setFormLoading(true);
+    setUploadStatus({ state: 'uploading', message: `${file.name} 업로드 중...` });
     try {
-      try {
-        if (!(await verifyAdminAccess())) {
-          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
-          window.location.reload();
-          return;
-        }
-      } catch (err) {
-        console.warn('Session verification warning:', err);
+      if (!(await verifyAdminAccess())) {
+        throw new Error('관리자 인증 세션이 만료되었습니다. 다시 로그인한 뒤 업로드해주세요.');
       }
 
       const formData = new FormData();
@@ -126,12 +157,13 @@ export default function Gallery({ type, subCategory }: Props) {
 
       if (!response.ok) {
         const text = await response.text();
-        if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-          window.location.reload();
-          return;
+        let serverMessage = '';
+        try {
+          serverMessage = JSON.parse(text)?.error || '';
+        } catch {
+          // Keep the status-based fallback for non-JSON proxy responses.
         }
-        throw new Error(`Upload failed: ${response.statusText}`);
+        throw new Error(serverMessage || `업로드 실패 (${response.status} ${response.statusText})`);
       }
 
       const text = await response.text();
@@ -172,11 +204,16 @@ export default function Gallery({ type, subCategory }: Props) {
         };
         img.src = result.url;
       }
+      setUploadStatus({
+        state: 'success',
+        message: `${file.name} 업로드 완료. 아래 적용(Apply)을 눌러야 작품에 저장됩니다.`,
+      });
     } catch (err: any) {
       console.error(err);
-      alert('파일 업로드 실패: ' + (err.message || 'Unknown error'));
+      setUploadStatus({ state: 'error', message: err.message || '이미지 업로드에 실패했습니다.' });
     } finally {
       setFormLoading(false);
+      input.value = '';
     }
   };
 
@@ -289,7 +326,7 @@ export default function Gallery({ type, subCategory }: Props) {
         
         let query = supabase
           .from('gallery_items')
-          .select('*')
+          .select('id,title,category,image_url,thumbnail_url,client,year,tools,description,width,height,order,type')
           .eq('type', dbType)
           .order('order', { ascending: false });
 
@@ -332,6 +369,7 @@ export default function Gallery({ type, subCategory }: Props) {
   const openLightbox = (index: number) => {
     setSelectedIndex(index);
     setIsZoomed(false);
+    setViewerImageFailed(false);
     
     // Track image click
     if (items[index]) {
@@ -341,6 +379,7 @@ export default function Gallery({ type, subCategory }: Props) {
   const closeLightbox = () => {
     setSelectedIndex(null);
     setIsZoomed(false);
+    setViewerImageFailed(false);
   };
 
   const nextImage = (e?: React.MouseEvent) => {
@@ -351,6 +390,7 @@ export default function Gallery({ type, subCategory }: Props) {
     if (selectedIndex === null) return;
     setSelectedIndex((selectedIndex + 1) % items.length);
     setIsZoomed(false);
+    setViewerImageFailed(false);
   };
 
   const prevImage = (e?: React.MouseEvent) => {
@@ -361,7 +401,30 @@ export default function Gallery({ type, subCategory }: Props) {
     if (selectedIndex === null) return;
     setSelectedIndex((selectedIndex - 1 + items.length) % items.length);
     setIsZoomed(false);
+    setViewerImageFailed(false);
   };
+
+  useEffect(() => {
+    if (selectedIndex === null || items.length < 2) return;
+
+    const adjacentIndexes = [
+      (selectedIndex + 1) % items.length,
+      (selectedIndex - 1 + items.length) % items.length
+    ];
+
+    const preloads = adjacentIndexes.map(index => {
+      const preload = new Image();
+      preload.decoding = 'async';
+      preload.src = netlifyImageUrl(items[index].imageUrl, { width: 2000, quality: 85 });
+      return preload;
+    });
+
+    return () => {
+      preloads.forEach(preload => {
+        preload.src = '';
+      });
+    };
+  }, [selectedIndex, items]);
 
   const handleMouseMove = (e: React.MouseEvent) => {
     // Parallax mouse effect is disabled in favor of scrollable 100% zoom
@@ -423,6 +486,13 @@ export default function Gallery({ type, subCategory }: Props) {
             {col.map((item) => {
               // Get original index for lightbox
               const originalIndex = items.findIndex(i => i.id === item.id);
+              const gallerySource = item.thumbnailUrl || item.imageUrl;
+              const optimizedGallerySource = netlifyImageUrl(gallerySource, { width: 720, quality: 82 });
+              const galleryFallbacks = uniqueImageUrls([
+                optimizedGallerySource !== gallerySource ? gallerySource : undefined,
+                item.imageUrl !== gallerySource ? netlifyImageUrl(item.imageUrl, { width: 720, quality: 82 }) : undefined,
+                item.imageUrl !== gallerySource ? item.imageUrl : undefined
+              ]);
               return (
                 <motion.div
                   key={item.id}
@@ -440,22 +510,36 @@ export default function Gallery({ type, subCategory }: Props) {
                   onClick={() => openLightbox(originalIndex)}
                 >
                   {/* Placeholder Skeleton */}
-                  {!loadedImages[item.id] && (
+                  {!loadedImages[item.id] && !failedImages[item.id] && (
                     <div className="absolute inset-0 bg-neutral-800/40 animate-pulse" />
+                  )}
+                  {failedImages[item.id] && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-neutral-900 px-6 text-center text-[10px] uppercase tracking-[0.2em] text-neutral-500">
+                      Image unavailable
+                    </div>
                   )}
                   
                   <img
-                    src={item.thumbnailUrl || item.imageUrl}
+                    src={optimizedGallerySource}
+                    srcSet={`${netlifyImageUrl(gallerySource, { width: 480, quality: 82 })} 480w, ${optimizedGallerySource} 720w`}
+                    sizes="(min-width: 1280px) 25vw, (min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
                     alt={item.title}
                     onLoad={() => handleImageLoad(item.id)}
+                    onError={(event) => {
+                      tryImageFallback(event.currentTarget, galleryFallbacks, () => {
+                        setFailedImages(prev => ({ ...prev, [item.id]: true }));
+                      });
+                    }}
                     className={cn(
                       "w-full  h-auto transition-all duration-1000 group-hover:scale-105 block mx-auto",
                       loadedImages[item.id] ? "opacity-100" : "opacity-0"
                     )}
                     referrerPolicy="no-referrer"
-                    loading="lazy"
+                    loading={originalIndex < columnsCount ? 'eager' : 'lazy'}
+                    fetchPriority={originalIndex < columnsCount ? 'high' : 'auto'}
+                    decoding="async"
                   />
-                  {isThumbnailUsed(item.thumbnailUrl || item.imageUrl) && (
+                  {isThumbnailUsed(gallerySource) && (
                     <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
                   )}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6">
@@ -554,17 +638,34 @@ export default function Gallery({ type, subCategory }: Props) {
                   isZoomed ? "items-start w-fit h-fit min-w-full min-h-full" : "items-center origin-center w-full h-full max-w-[100vw] max-h-[98vh]"
                 )}
               >
-                <img
-                  ref={imgRef}
-                  src={items[selectedIndex].imageUrl}
-                  alt={items[selectedIndex].title}
-                  className={cn(
-                    "shadow-2xl flex-shrink-0",
-                    isZoomed ? "max-w-none cursor-zoom-out" : "w-auto h-auto max-w-full max-h-full object-contain"
-                  )}
-                  onClick={() => setIsZoomed(!isZoomed)}
-                  referrerPolicy="no-referrer"
-                />
+                {!viewerImageFailed ? (
+                  <img
+                    ref={imgRef}
+                    src={isZoomed ? items[selectedIndex].imageUrl : netlifyImageUrl(items[selectedIndex].imageUrl, { width: 2400, quality: 88 })}
+                    alt={items[selectedIndex].title}
+                    className={cn(
+                      "shadow-2xl flex-shrink-0",
+                      isZoomed ? "max-w-none cursor-zoom-out" : "w-auto h-auto max-w-full max-h-full object-contain"
+                    )}
+                    onClick={() => setIsZoomed(!isZoomed)}
+                    onError={(event) => {
+                      const viewerFallbacks = uniqueImageUrls([
+                        items[selectedIndex].imageUrl,
+                        items[selectedIndex].thumbnailUrl
+                          ? netlifyImageUrl(items[selectedIndex].thumbnailUrl, { width: 1600, quality: 85 })
+                          : undefined,
+                        items[selectedIndex].thumbnailUrl
+                      ]).filter(url => url !== event.currentTarget.src);
+                      tryImageFallback(event.currentTarget, viewerFallbacks, () => setViewerImageFailed(true));
+                    }}
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                  />
+                ) : (
+                  <div className="flex min-h-64 min-w-64 items-center justify-center border border-white/10 bg-neutral-950 px-10 text-center text-xs uppercase tracking-[0.2em] text-neutral-500">
+                    Original image unavailable
+                  </div>
+                )}
               </motion.div>
             </div>
 
@@ -721,8 +822,9 @@ export default function Gallery({ type, subCategory }: Props) {
                       <span className="text-[10px] text-neutral-300">Choose File</span>
                       <input 
                         type="file" 
-                        accept="image/*" 
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
                         onChange={(e) => handleFormFileUpload(e, false)} 
+                        disabled={formLoading}
                         className="hidden" 
                       />
                     </label>
@@ -735,13 +837,31 @@ export default function Gallery({ type, subCategory }: Props) {
                       <span className="text-[10px] text-neutral-300">Choose File</span>
                       <input 
                         type="file" 
-                        accept="image/*" 
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/avif"
                         onChange={(e) => handleFormFileUpload(e, true)} 
+                        disabled={formLoading}
                         className="hidden" 
                       />
                     </label>
                   </div>
                 </div>
+                {uploadStatus.state !== 'idle' && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className={cn(
+                      'flex items-center gap-2 rounded-sm border px-3 py-2 text-[10px] font-sans',
+                      uploadStatus.state === 'error'
+                        ? 'border-red-500/30 bg-red-500/10 text-red-300'
+                        : uploadStatus.state === 'success'
+                          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                          : 'border-blue-500/30 bg-blue-500/10 text-blue-300'
+                    )}
+                  >
+                    {uploadStatus.state === 'uploading' && <Loader2 className="h-3 w-3 shrink-0 animate-spin" />}
+                    <span>{uploadStatus.message}</span>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}

@@ -4,6 +4,7 @@ dist/
 coverage/
 .DS_Store
 *.log
+gha-creds-*.json
 data/messages.json
 uploads/
 .env*
