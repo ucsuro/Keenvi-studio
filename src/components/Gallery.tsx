@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, ChevronLeft, ChevronRight, Maximize2, Search, Upload, Loader2 } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Search, Upload, Loader2, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
 import { apiFetch, verifyAdminAccess } from '../lib/api';
@@ -34,6 +34,9 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
   const [columnsCount, setColumnsCount] = useState(4);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
   const [viewerImageFailed, setViewerImageFailed] = useState(false);
+  const [deleteCandidate, setDeleteCandidate] = useState<GalleryItem | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
 
@@ -217,6 +220,48 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
       alert('적용 실패: ' + (err.message || 'Unknown error'));
     } finally {
       setFormLoading(false);
+    }
+  };
+
+  const requestDelete = (item: GalleryItem) => {
+    if (!isAdmin) return;
+    setDeleteError(null);
+    setDeleteCandidate(item);
+  };
+
+  const cancelDelete = () => {
+    if (deleteLoading) return;
+    setDeleteCandidate(null);
+    setDeleteError(null);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteCandidate || deleteLoading) return;
+    setDeleteLoading(true);
+    setDeleteError(null);
+
+    try {
+      const response = await apiFetch(`/api/gallery/${encodeURIComponent(deleteCandidate.id)}`, {
+        method: 'DELETE',
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.deleted !== true) {
+        throw new Error(result?.error || `삭제 실패 (${response.status} ${response.statusText})`);
+      }
+
+      const remainingItems = items.filter(item => item.id !== deleteCandidate.id);
+      setItems(remainingItems);
+      setSelectedIndex(currentIndex => {
+        if (remainingItems.length === 0 || currentIndex === null) return null;
+        return Math.min(currentIndex, remainingItems.length - 1);
+      });
+      setDeleteCandidate(null);
+      setViewerImageFailed(false);
+      setIsZoomed(false);
+    } catch (err: any) {
+      setDeleteError(err.message || '게시물을 삭제하지 못했습니다.');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -581,12 +626,21 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
               >
                 <div className="w-fit py-1.5 px-5 bg-black/30 backdrop-blur-[2px] border border-white/5 flex flex-col md:flex-row items-center gap-x-6 gap-y-1 text-center md:text-left pointer-events-auto rounded-sm">
                   {isAdmin && (
-                    <button
-                      onClick={() => startEditing(items[selectedIndex])}
-                      className="px-2.5 py-0.5 text-[10px] uppercase font-semibold tracking-widest bg-blue-600/80 hover:bg-blue-600 border border-blue-500/20 rounded-sm text-white transition-all active:scale-95 cursor-pointer z-[10020]"
-                    >
-                      Modify
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => requestDelete(items[selectedIndex])}
+                        className="px-2.5 py-0.5 text-[10px] uppercase font-semibold tracking-widest bg-red-950/80 hover:bg-red-800 border border-red-500/20 rounded-sm text-red-200 transition-all active:scale-95 cursor-pointer z-[10020] flex items-center gap-1.5"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        DEL
+                      </button>
+                      <button
+                        onClick={() => startEditing(items[selectedIndex])}
+                        className="px-2.5 py-0.5 text-[10px] uppercase font-semibold tracking-widest bg-blue-600/80 hover:bg-blue-600 border border-blue-500/20 rounded-sm text-white transition-all active:scale-95 cursor-pointer z-[10020]"
+                      >
+                        Modify
+                      </button>
+                    </div>
                   )}
                   <h2 className="text-[14px] font-medium tracking-widest text-white uppercase">{items[selectedIndex].title}</h2>
                   
@@ -608,6 +662,58 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
               </motion.div>
             )}
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {deleteCandidate && (
+          <div className="fixed inset-0 z-[10030] bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="delete-artwork-title"
+              className="w-full max-w-md bg-[#0e0e0e] border border-red-500/20 rounded-sm p-6 font-sans text-white"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h2 id="delete-artwork-title" className="text-sm font-semibold uppercase tracking-[0.2em] text-red-300">
+                Delete Artwork
+              </h2>
+              <p className="mt-4 text-sm leading-6 text-neutral-300">
+                <span className="text-white">{deleteCandidate.title}</span> 게시물을 삭제합니다.
+              </p>
+              <p className="mt-2 text-xs leading-5 text-neutral-500">
+                DB 기록과 R2에 저장된 원본 및 썸네일이 함께 삭제되며 되돌릴 수 없습니다.
+              </p>
+              {deleteError && (
+                <p role="alert" className="mt-4 border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                  {deleteError}
+                </p>
+              )}
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  onClick={cancelDelete}
+                  disabled={deleteLoading}
+                  className="flex-1 py-2 bg-neutral-900 hover:bg-neutral-800 border border-white/5 text-neutral-300 transition-colors rounded-sm disabled:opacity-40"
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deleteLoading}
+                  className="flex-1 py-2 bg-red-700 hover:bg-red-600 text-white transition-colors rounded-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40"
+                >
+                  {deleteLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                  {deleteLoading ? '삭제 중...' : '삭제 확인'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

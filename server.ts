@@ -1,6 +1,6 @@
 import express from "express";
 import dotenv from "dotenv";
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import { createClient } from "@supabase/supabase-js";
 import multer from "multer";
 import sharp from "sharp";
@@ -47,6 +47,7 @@ async function requireAdmin(req: any, res: any, next: any) {
   }
 
   req.user = user;
+  req.accessToken = token;
   next();
 }
 
@@ -190,6 +191,52 @@ async function deleteFromR2(url: string) {
   }
 }
 
+function getR2ObjectKey(url: string) {
+  if (!url || !R2_PUBLIC_URL) return null;
+  try {
+    const objectUrl = new URL(url);
+    const publicBase = new URL(`${R2_PUBLIC_URL}/`);
+    if (objectUrl.origin !== publicBase.origin || !objectUrl.pathname.startsWith(publicBase.pathname)) {
+      return null;
+    }
+    const key = decodeURIComponent(objectUrl.pathname.slice(publicBase.pathname.length));
+    return key || null;
+  } catch {
+    return null;
+  }
+}
+
+async function deleteGalleryImagesFromR2(urls: string[]) {
+  const keys = [...new Set(urls.map(getR2ObjectKey).filter((key): key is string => Boolean(key)))];
+  if (keys.length === 0) return [];
+  if (!process.env.R2_ACCOUNT_ID || !process.env.R2_ACCESS_KEY_ID || !process.env.R2_SECRET_ACCESS_KEY) {
+    throw new Error("Cloudflare R2 credentials are not configured in environment variables.");
+  }
+
+  const result = await getR2Client().send(new DeleteObjectsCommand({
+    Bucket: R2_BUCKET,
+    Delete: {
+      Objects: keys.map((Key) => ({ Key })),
+      Quiet: true,
+    },
+  }));
+
+  if (result.Errors?.length) {
+    throw new Error(`R2 deletion failed for ${result.Errors.length} object(s).`);
+  }
+  return keys;
+}
+
+function createUserSupabaseClient(accessToken: string) {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error("Supabase authentication is not configured.");
+  }
+  return createClient(supabaseUrl, supabaseAnonKey, {
+    global: { headers: { Authorization: `Bearer ${accessToken}` } },
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
@@ -311,6 +358,55 @@ async function startServer() {
       for (const url of urls) await deleteFromR2(url);
       res.json({ status: "success" });
     } catch (err) { res.status(500).json({ error: "Cleanup failed" }); }
+  });
+
+  app.delete("/api/gallery/:id", requireAdmin, async (req: any, res, next) => {
+    const itemId = String(req.params.id || "").trim();
+    if (!itemId || itemId.length > 128) {
+      return res.status(400).json({ error: "Invalid gallery item id." });
+    }
+
+    try {
+      const userSupabase = createUserSupabaseClient(req.accessToken);
+      const { data: item, error: lookupError } = await userSupabase
+        .from("gallery_items")
+        .select("id,image_url,thumbnail_url")
+        .eq("id", itemId)
+        .single();
+
+      if (lookupError || !item) {
+        if (lookupError?.code === "PGRST116") {
+          return res.status(404).json({ error: "Gallery item not found." });
+        }
+        throw lookupError || new Error("Gallery item lookup failed.");
+      }
+
+      const { data: isDatabaseAdmin, error: adminCheckError } = await userSupabase.rpc("is_admin");
+      if (adminCheckError) throw adminCheckError;
+      if (isDatabaseAdmin !== true) {
+        return res.status(403).json({ error: "Supabase administrator access required." });
+      }
+
+      const deletedObjectKeys = await deleteGalleryImagesFromR2([
+        item.image_url,
+        item.thumbnail_url,
+      ].filter((url): url is string => typeof url === "string" && url.length > 0));
+
+      const { data: deletedItem, error: deleteError } = await userSupabase
+        .from("gallery_items")
+        .delete()
+        .eq("id", itemId)
+        .select("id")
+        .single();
+
+      if (deleteError || !deletedItem) {
+        throw deleteError || new Error("Gallery item deletion failed.");
+      }
+
+      res.json({ deleted: true, id: deletedItem.id, deletedObjectCount: deletedObjectKeys.length });
+    } catch (err) {
+      next(err);
+    }
   });
 
   // --- VITE MIDDLEWARE ---
