@@ -15,7 +15,6 @@ interface GalleryItem {
   thumbnailUrl?: string;
   client?: string;
   year?: string;
-  tools?: string;
   description?: string;
   width?: number;
   height?: number;
@@ -326,7 +325,7 @@ export default function Gallery({ type, subCategory }: Props) {
         
         let query = supabase
           .from('gallery_items')
-          .select('id,title,category,image_url,thumbnail_url,client,year,tools,description,width,height,order,type')
+          .select('id,title,category,image_url,thumbnail_url,client,year,description,width,height,order,type')
           .eq('type', dbType)
           .order('order', { ascending: false });
 
@@ -347,7 +346,6 @@ export default function Gallery({ type, subCategory }: Props) {
             thumbnailUrl: item.thumbnail_url,
             client: item.client,
             year: item.year,
-            tools: item.tools,
             description: item.description,
             width: item.width,
             height: item.height
