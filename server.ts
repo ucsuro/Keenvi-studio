@@ -381,17 +381,6 @@ async function startServer() {
         throw lookupError || new Error("Gallery item lookup failed.");
       }
 
-      const { data: isDatabaseAdmin, error: adminCheckError } = await userSupabase.rpc("is_admin");
-      if (adminCheckError) throw adminCheckError;
-      if (isDatabaseAdmin !== true) {
-        return res.status(403).json({ error: "Supabase administrator access required." });
-      }
-
-      const deletedObjectKeys = await deleteGalleryImagesFromR2([
-        item.image_url,
-        item.thumbnail_url,
-      ].filter((url): url is string => typeof url === "string" && url.length > 0));
-
       const { data: deletedItem, error: deleteError } = await userSupabase
         .from("gallery_items")
         .delete()
@@ -402,6 +391,11 @@ async function startServer() {
       if (deleteError || !deletedItem) {
         throw deleteError || new Error("Gallery item deletion failed.");
       }
+
+      const deletedObjectKeys = await deleteGalleryImagesFromR2([
+        item.image_url,
+        item.thumbnail_url,
+      ].filter((url): url is string => typeof url === "string" && url.length > 0));
 
       res.json({ deleted: true, id: deletedItem.id, deletedObjectCount: deletedObjectKeys.length });
     } catch (err) {
