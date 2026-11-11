@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect } from 'react';
+import { lazy, Suspense, useState, useEffect, useRef } from 'react';
 import Navigation from './components/Navigation';
 import { cn } from './lib/utils';
 import { supabase } from './lib/supabase';
@@ -23,6 +23,17 @@ export default function App() {
   const [adminPw, setAdminPw] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [categories, setCategories] = useState<Record<string, string[]>>({ portfolio: [], project: [], personal: [] });
+  const adminVerificationRef = useRef<{ token: string; result: Promise<boolean> } | null>(null);
+
+  const verifyAdminToken = (accessToken: string) => {
+    if (adminVerificationRef.current?.token === accessToken) {
+      return adminVerificationRef.current.result;
+    }
+
+    const result = verifyAdminAccess(accessToken).catch(() => false);
+    adminVerificationRef.current = { token: accessToken, result };
+    return result;
+  };
 
   const fetchCategories = async () => {
     try {
@@ -50,13 +61,14 @@ export default function App() {
     fetchCategories();
     
     // Auth state listener
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
+        adminVerificationRef.current = null;
         setIsLoggedIn(false);
         return;
       }
 
-      void verifyAdminAccess(session.access_token).then(setIsLoggedIn).catch(() => setIsLoggedIn(false));
+      void verifyAdminToken(session.access_token).then(setIsLoggedIn);
     });
 
     return () => subscription.unsubscribe();
@@ -73,7 +85,7 @@ export default function App() {
       if (error) throw error;
 
       const isAdmin = Boolean(data.session?.access_token)
-        && await verifyAdminAccess(data.session!.access_token);
+        && await verifyAdminToken(data.session!.access_token);
       if (!isAdmin) {
         await supabase.auth.signOut();
         throw new Error('이 계정에는 관리자 권한이 없습니다.');
@@ -91,6 +103,7 @@ export default function App() {
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    adminVerificationRef.current = null;
     setIsLoggedIn(false);
     setActivePage('Intro');
   };

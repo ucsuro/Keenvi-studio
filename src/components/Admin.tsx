@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Trash2, X, Upload, Check, ChevronUp, ChevronDown, RefreshCcw } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { apiFetch, verifyAdminAccess } from '../lib/api';
+import { apiFetch } from '../lib/api';
 import { DEFAULT_INTRO, DEFAULT_ABOUT, DEFAULT_CATEGORIES } from '../constants/defaults';
 import { cn } from '../lib/utils';
 
@@ -350,22 +350,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     }));
 
     try {
-      try {
-        if (!(await verifyAdminAccess())) {
-          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
-          window.location.reload();
-          return;
-        }
-      } catch (e) {
-        console.warn('Session verification warning:', e);
-      }
-
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        throw new Error('인증 세션이 없습니다.');
-      }
-
       // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
       const response = await apiFetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
@@ -381,9 +365,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       const resText = await response.text();
       if (resText.includes('Cookie check') || resText.includes('doctype html') || resText.includes('<html')) {
-        alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-        window.location.reload();
-        return;
+        throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 입력 내용은 유지됩니다. 로그인 상태를 확인해주세요.');
       }
 
       if (!response.ok) {
@@ -450,22 +432,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     setLoading(true);
     setAutoThumbGenStatus(prev => ({ ...prev, [item.id]: 'loading' }));
     try {
-      try {
-        if (!(await verifyAdminAccess())) {
-          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
-          window.location.reload();
-          return;
-        }
-      } catch (e) {
-        console.warn('Session verification warning:', e);
-      }
-
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('인증 세션이 없습니다.');
-      }
-
       // Generate 450px wide high-quality thumbnail on server using sharp (sharper, CORS-safe)
       const response = await apiFetch('/api/generate-thumbnail-from-url', {
         method: 'POST',
@@ -481,9 +447,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
       const resText = await response.text();
       if (resText.includes('Cookie check') || resText.includes('doctype html') || resText.includes('<html')) {
-        alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-        window.location.reload();
-        return;
+        throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 입력 내용은 유지됩니다. 로그인 상태를 확인해주세요.');
       }
 
       if (!response.ok) {
@@ -588,30 +552,17 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
+      const response = await apiFetch(`/api/gallery/${encodeURIComponent(itemToDelete.id)}`, {
+        method: 'DELETE',
+      });
+      const result = await response.json().catch(() => null);
+      if (!response.ok || result?.deleted !== true) {
+        throw new Error(result?.error || `삭제 실패 (${response.status} ${response.statusText})`);
       }
 
-      const filesToDelete = [itemToDelete.imageUrl];
-      if (itemToDelete.thumbnailUrl && itemToDelete.thumbnailUrl !== itemToDelete.imageUrl) {
-        filesToDelete.push(itemToDelete.thumbnailUrl);
-      }
-      await cleanupOldFiles(filesToDelete);
-
-      const { error } = await supabase
-        .from('gallery_items')
-        .delete()
-        .eq('id', itemToDelete.id);
-
-      if (!error) {
-        setItems(prev => prev.filter(item => item.id !== itemToDelete.id));
-        setShowDeleteModal(false);
-        setItemToDelete(null);
-      } else {
-        throw error;
-      }
+      setItems(prev => prev.filter(item => item.id !== itemToDelete.id));
+      setShowDeleteModal(false);
+      setItemToDelete(null);
     } catch (err: any) {
       console.error('Delete failed:', err);
       let errorMsg = err.message || 'Unknown error occurred';
@@ -638,16 +589,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleFileUpload = async (file: File) => {
     try {
-      try {
-        if (!(await verifyAdminAccess())) {
-          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
-          window.location.reload();
-          return null;
-        }
-      } catch (e) {
-        console.warn('Session verification warning:', e);
-      }
-
       const formData = new FormData();
       formData.append('file', file);
 
@@ -661,16 +602,15 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         const text = await response.text();
         console.error('Upload error response:', text);
         if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-          window.location.reload();
-          return null;
+          throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 게시물 입력 내용은 유지됩니다.');
         }
+        let serverMessage = '';
         try {
-          const errorData = JSON.parse(text);
-          throw new Error(errorData.error || 'Server upload failed');
-        } catch (e) {
-          throw new Error(`Server error (${response.status}): ${text.substring(0, 100)}`);
+          serverMessage = JSON.parse(text)?.error || '';
+        } catch {
+          // Use the status-based fallback for non-JSON proxy responses.
         }
+        throw new Error(serverMessage || `Server error (${response.status}): ${text.substring(0, 100)}`);
       }
 
       const text = await response.text();
@@ -680,9 +620,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       } catch (err) {
         console.error('Failed to parse upload response:', text);
         if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-          window.location.reload();
-          return null;
+          throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 게시물 입력 내용은 유지됩니다.');
         }
         throw new Error('Server returned invalid response format');
       }
@@ -694,16 +632,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
   const handleManualThumbnailUpload = async (file: File) => {
     try {
-      try {
-        if (!(await verifyAdminAccess())) {
-          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
-          window.location.reload();
-          return null;
-        }
-      } catch (e) {
-        console.warn('Session verification warning:', e);
-      }
-
       const formData = new FormData();
       formData.append('file', file);
 
@@ -717,16 +645,15 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
         const text = await response.text();
         console.error('Thumbnail upload error response:', text);
         if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-          window.location.reload();
-          return null;
+          throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 게시물 입력 내용은 유지됩니다.');
         }
+        let serverMessage = '';
         try {
-          const errorData = JSON.parse(text);
-          throw new Error(errorData.error || 'Server thumbnail upload failed');
-        } catch (e) {
-          throw new Error(`Server thumbnail error (${response.status}): ${text.substring(0, 100)}`);
+          serverMessage = JSON.parse(text)?.error || '';
+        } catch {
+          // Use the status-based fallback for non-JSON proxy responses.
         }
+        throw new Error(serverMessage || `Server thumbnail error (${response.status}): ${text.substring(0, 100)}`);
       }
 
       const text = await response.text();
@@ -736,9 +663,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
       } catch (err) {
         console.error('Failed to parse thumbnail upload response:', text);
         if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-          window.location.reload();
-          return null;
+          throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 게시물 입력 내용은 유지됩니다.');
         }
         return null;
       }
@@ -758,22 +683,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
     setIsGeneratingNewThumb(true);
     try {
-      try {
-        if (!(await verifyAdminAccess())) {
-          alert('인증 세션이 만료되었습니다. 페이지가 자동으로 새로고침되며 다시 로그인/인증을 갱신합니다. 새로고침 후 다시 실행해주세요.');
-          window.location.reload();
-          return;
-        }
-      } catch (e) {
-        console.warn('Session verification warning:', e);
-      }
-
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
-      }
-
       if (newArt.file) {
         const result = await handleFileUpload(newArt.file);
         if (result) {
@@ -803,9 +712,7 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
 
         const resText = await response.text();
         if (resText.includes('Cookie check') || resText.includes('doctype html') || resText.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다.');
-          window.location.reload();
-          return;
+          throw new Error('서버 인증 응답이 올바르지 않습니다. 현재 게시물 입력 내용은 유지됩니다.');
         }
 
         if (!response.ok) {
@@ -837,12 +744,6 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        throw new Error('인증 세션이 없습니다. 다시 로그인해 주세요.');
-      }
-
       let finalImageUrl = newArt.imageUrl;
       let finalThumbnailUrl = newArt.thumbnailUrl;
       let finalWidth = newArt.width;
@@ -858,6 +759,13 @@ export default function Admin({ onCategoriesChange }: AdminProps) {
             if (!newArt.thumbnailUrl || newArt.thumbnailUrl === newArt.imageUrl) {
               finalThumbnailUrl = result.thumbnailUrl;
             }
+            setNewArt(prev => ({
+              ...prev,
+              imageUrl: finalImageUrl,
+              thumbnailUrl: finalThumbnailUrl,
+              file: null,
+            }));
+            setPreviewUrl(finalImageUrl);
           }
         } catch (uploadErr: any) {
           console.error('File Upload during Save Art failed:', uploadErr);

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, ChevronLeft, ChevronRight, Maximize2, Search, Upload, Loader2, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { supabase } from '../lib/supabase';
-import { apiFetch, verifyAdminAccess } from '../lib/api';
+import { apiFetch } from '../lib/api';
 import { trackImageClick } from '../lib/analytics';
 
 interface GalleryItem {
@@ -33,6 +33,7 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
   const [isZoomed, setIsZoomed] = useState(false);
   const [columnsCount, setColumnsCount] = useState(4);
   const [failedImages, setFailedImages] = useState<Record<string, boolean>>({});
+  const [failedOriginalImages, setFailedOriginalImages] = useState<Record<string, boolean>>({});
   const [viewerImageFailed, setViewerImageFailed] = useState(false);
   const [deleteCandidate, setDeleteCandidate] = useState<GalleryItem | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -109,10 +110,6 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
     setFormLoading(true);
     setUploadStatus({ state: 'uploading', message: `${file.name} 업로드 중...` });
     try {
-      if (!(await verifyAdminAccess())) {
-        throw new Error('관리자 인증 세션이 만료되었습니다. 다시 로그인한 뒤 업로드해주세요.');
-      }
-
       const formData = new FormData();
       formData.append('file', file);
 
@@ -140,9 +137,7 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
         result = JSON.parse(text);
       } catch (err) {
         if (text.includes('Cookie check') || text.includes('doctype html') || text.includes('<html')) {
-          alert('인증 세션이 만료되었습니다. 페이지를 새로고침하여 인증을 갱신합니다. 새로고침 후 다시 업로드해주세요.');
-          window.location.reload();
-          return;
+          throw new Error('서버 인증 응답이 올바르지 않습니다. 수정 내용은 유지됩니다. 로그인 상태를 확인해주세요.');
         }
         throw new Error('Server returned invalid response format');
       }
@@ -213,8 +208,21 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
         throw error;
       }
 
-      alert('수정이 적용되었습니다.');
-      window.location.reload();
+      const updatedItem: GalleryItem = {
+        ...editingItem,
+        title: editForm.title.trim(),
+        category: editForm.category.trim(),
+        client: editForm.client.trim() || undefined,
+        year: editForm.year.trim() || undefined,
+        description: editForm.description.trim() || undefined,
+        imageUrl: editForm.imageUrl.trim(),
+        thumbnailUrl: editForm.thumbnailUrl.trim() || undefined,
+        width: w,
+        height: h,
+      };
+      setItems(currentItems => currentItems.map(item => item.id === updatedItem.id ? updatedItem : item));
+      setEditingItem(null);
+      setUploadStatus({ state: 'idle', message: '' });
     } catch (err: any) {
       console.error(err);
       alert('적용 실패: ' + (err.message || 'Unknown error'));
@@ -265,9 +273,33 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
     }
   };
 
-  const isThumbnailUsed = (url: string | undefined): boolean => {
-    if (!url || !isAdmin) return false;
-    return url.includes('/thumbnails/') || url.includes('-t.') || url.includes('thumb-') || url.includes('t-');
+  const isConfirmedLegacyBrokenOriginal = (url: string) => {
+    try {
+      const parsedUrl = new URL(url);
+      return parsedUrl.hostname.endsWith('.supabase.co')
+        && parsedUrl.pathname.includes('/storage/v1/object/public/gallery/uploads/0.');
+    } catch {
+      return false;
+    }
+  };
+
+  const isOriginalUnavailable = (item: GalleryItem) => {
+    return Boolean(failedOriginalImages[item.id]) || isConfirmedLegacyBrokenOriginal(item.imageUrl);
+  };
+
+  const updateThumbnailDot = (image: HTMLImageElement, item: GalleryItem, requestedSource: string) => {
+    const dot = image.parentElement?.querySelector<HTMLElement>('[data-thumbnail-dot]');
+    if (!dot) return;
+
+    const usedFallback = Number(image.dataset.fallbackIndex || 0) > 0;
+    const distinctThumbnail = Boolean(item.thumbnailUrl)
+      && item.thumbnailUrl !== item.imageUrl
+      && requestedSource === item.thumbnailUrl;
+    const smallerThanOriginal = item.width && item.height
+      ? image.naturalWidth < item.width || image.naturalHeight < item.height
+      : image.naturalWidth <= 900;
+
+    dot.classList.toggle('hidden', !(distinctThumbnail && !usedFallback && smallerThanOriginal));
   };
 
   // Initial calculation for visible count based on columns
@@ -482,7 +514,17 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
                   <img
                     src={gallerySource}
                     alt={item.title}
+                    onLoad={(event) => updateThumbnailDot(event.currentTarget, item, gallerySource)}
                     onError={(event) => {
+                      const image = event.currentTarget;
+                      const currentSourceWasOriginal = gallerySource === item.imageUrl
+                        || Number(image.dataset.fallbackIndex || 0) > 0;
+                      if (currentSourceWasOriginal) {
+                        setFailedOriginalImages(prev => prev[item.id] ? prev : { ...prev, [item.id]: true });
+                      }
+                      image.parentElement
+                        ?.querySelector<HTMLElement>('[data-thumbnail-dot]')
+                        ?.classList.add('hidden');
                       tryImageFallback(event.currentTarget, galleryFallbacks, () => {
                         setFailedImages(prev => ({ ...prev, [item.id]: true }));
                       });
@@ -493,8 +535,22 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
                     fetchPriority={originalIndex < columnsCount ? 'high' : 'auto'}
                     decoding="async"
                   />
-                  {isThumbnailUsed(gallerySource) && (
-                    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)] pointer-events-none z-10" />
+                  {isAdmin && (
+                    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 pointer-events-none z-10">
+                      <span
+                        data-thumbnail-dot
+                        title="Small thumbnail connected"
+                        className="hidden w-1.5 h-1.5 bg-white rounded-full shadow-[0_0_3px_rgba(0,0,0,0.8)]"
+                      />
+                      {isOriginalUnavailable(item) && (
+                        <span
+                          title="Original image unavailable"
+                          className="flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600/90 px-1 text-[10px] font-bold leading-none text-white shadow-[0_0_4px_rgba(0,0,0,0.9)]"
+                        >
+                          !
+                        </span>
+                      )}
+                    </div>
                   )}
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-6">
                     <p className="text-blue-400 text-[10px] tracking-[0.2em] mb-1">{item.category}</p>
@@ -601,6 +657,8 @@ export default function Gallery({ type, subCategory, isAdmin }: Props) {
                     )}
                     onClick={() => setIsZoomed(!isZoomed)}
                     onError={(event) => {
+                      const currentItem = items[selectedIndex];
+                      setFailedOriginalImages(prev => prev[currentItem.id] ? prev : { ...prev, [currentItem.id]: true });
                       const viewerFallbacks = items[selectedIndex].thumbnailUrl
                         ? [items[selectedIndex].thumbnailUrl]
                         : [];
